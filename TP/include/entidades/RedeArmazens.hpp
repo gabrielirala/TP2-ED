@@ -1,27 +1,33 @@
 #ifndef REDE_ARMAZENS_HPP
 #define REDE_ARMAZENS_HPP
 
-#include <map>
-#include <string>
-#include "Armazem.hpp"
-#include "Produto.hpp"
+#include "estruturas/Grafo.hpp" //
+#include "entidades/Armazem.hpp" //
+#include <unordered_map>
+#include <memory>
+#include <vector>
 
-class RedeArmazens {
-private:
-    std::map<std::string, Armazem*> armazens;
+namespace LogisticSystem {
 
-public:
-    RedeArmazens();
-    ~RedeArmazens();
+    class RedeArmazens {
+    private:
+        std::shared_ptr<Grafo> grafoArmazens; //
+        std::unordered_map<ID_t, std::shared_ptr<Armazem>> armazens; //
 
-    void adicionarArmazem(const std::string& nome, int capacidade);
-    void removerArmazem(const std::string& nome);
-    void adicionarProduto(const std::string& nomeArmazem, Produto* produto);
-    void removerProduto(const std::string& nomeArmazem, const std::string& nomeProduto);
-    Armazem* buscarArmazem(const std::string& nome);
-    void listarArmazens() const;
-    void listarProdutosArmazem(const std::string& nomeArmazem) const;
-    int getTotalArmazens() const;
-};
+    public:
+        RedeArmazens();
+        ~RedeArmazens() = default;
 
-#endif // REDE_ARMAZENS_HPP
+        bool adicionarArmazem(ID_t id, const std::string& nome, Capacity_t capacidadeTotal);
+        bool removerArmazem(ID_t id);
+        std::shared_ptr<Armazem> obterArmazem(ID_t id) const;
+        std::vector<std::shared_ptr<Armazem>> obterTodosArmazens() const;
+        
+        std::shared_ptr<Grafo> obterGrafo() const { return grafoArmazens; } //
+
+        void limpar();
+    };
+
+} // namespace LogisticSystem
+
+#endif
