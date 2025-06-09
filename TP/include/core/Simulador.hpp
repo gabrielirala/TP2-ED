@@ -1,109 +1,93 @@
 #ifndef SIMULADOR_HPP
 #define SIMULADOR_HPP
 
-#include "Escalonador.hpp"
-#include "GerenciadorEstatisticas.hpp"
-#include "entidades/RedeArmazens.hpp"
-#include "entidades/SistemaTransporte.hpp"
-#include "utils/Tipos.hpp"
-#include "interfaces/IProcessadorEvento.hpp"
 #include <memory>
 #include <string>
 #include <vector>
+#include <iostream> // Para debug
+
+#include "core/Escalonador.hpp"
+#include "entidades/RedeArmazens.hpp"
+#include "entidades/SistemaTransporte.hpp"
+#include "core/GerenciadorEstatisticas.hpp"
+#include "entidades/Pacote.hpp"
+#include "interfaces/IProcessadorEvento.hpp"
+#include "interfaces/IObservador.hpp"
+#include "utils/Tipos.hpp" // Para ParametrosSimulacaoGlobal
 
 namespace LogisticSystem {
-    struct ParametrosSimulacao {
-        Timestamp_t tempoFinal;
-        Distance_t tempoTransportePadrao;
-        Distance_t tempoManipulacaoPadrao;
-        Capacity_t capacidadeTransportePadrao;
-        Distance_t intervaloTransporte;
-        double thresholdGargalo;
-        bool modoDebug;
-        std::string arquivoTopologia;
-        std::string arquivoPacotes;
-        std::string arquivoSaida;
-        
-        ParametrosSimulacao() : tempoFinal(0.0), tempoTransportePadrao(2.5),
-                              tempoManipulacaoPadrao(0.1), capacidadeTransportePadrao(10),
-                              intervaloTransporte(24.0), thresholdGargalo(1.5),
-                              modoDebug(false) {}
-    };
-    
-    class Simulador : public IProcessadorEvento {
+
+    // A classe Simulador orquestra a simulação de eventos discretos.
+    // Ela age como um processador de eventos e um observador para gerenciar pacotes.
+    class Simulador : public IProcessadorEvento,
+                      public IObservador<std::shared_ptr<Pacote>>,
+                      public std::enable_shared_from_this<Simulador> { // Habilita shared_from_this para obter shared_ptr de 'this'
     private:
-        // Componentes principais
         std::unique_ptr<Escalonador> escalonador;
         std::unique_ptr<RedeArmazens> redeArmazens;
         std::unique_ptr<SistemaTransporte> sistemaTransporte;
         std::unique_ptr<GerenciadorEstatisticas> gerenciadorEstatisticas;
-        
-        // Configuração
-        ParametrosSimulacao parametros;
+        std::vector<std::shared_ptr<Pacote>> pacotes; // Lista de todos os pacotes na simulação
+
+        ParametrosSimulacaoGlobal parametrosSimulacao; // NOVOS parâmetros globais
+
         bool simulacaoInicializada;
         bool simulacaoFinalizada;
-        
-        // Dados de entrada
-        std::vector<std::shared_ptr<Pacote>> pacotes;
-        
+
+        // Métodos internos de inicialização e validação
+        bool validarParametros() const;
+        bool validarArquivos() const;
+        bool validarConsistencia() const; // Verifica a consistência da rede e pacotes
+
+        // Funções para carregar e configurar os componentes da simulação
+        void configurarSistemas();
+        void agendarEventosIniciais(); // Agenda eventos de chegada de pacotes e transporte
+
+        bool verificarCondicaoFinalizacao(); // Verifica se a simulação deve terminar
+        void finalizarSimulacao(); // Realiza ações de finalização
+
+        void limparRecursos(); // Libera recursos alocados
+
     public:
         Simulador();
         ~Simulador();
-        
-        // Configuração da simulação
-        void carregarParametros(const std::string& arquivoConfig);
-        void carregarParametros(const ParametrosSimulacao& params);
-        void definirArquivoTopologia(const std::string& arquivo);
-        void definirArquivoPacotes(const std::string& arquivo);
-        void definirArquivoSaida(const std::string& arquivo);
-        
-        // Inicialização
-        bool inicializar();
-        void reinicializar();
-        
-        // Execução
+
+        // Inicializa a simulação lendo de um único arquivo de entrada
+        bool inicializar(const std::string& arquivoEntrada);
+        void reinicializar(); // Reinicializa o simulador para uma nova execução
+
+        // Métodos de controle da simulação
         bool executarSimulacao();
         void executarAteTimestamp(Timestamp_t limite);
         void executarProximoEvento();
         void pararSimulacao();
-        
-        // IProcessadorEvento
+
+        // Implementação da interface IProcessadorEvento
         void processarEvento(std::shared_ptr<Evento> evento) override;
         bool podeProcessar(TipoEvento tipo) const override;
-        
-        // Consultas de estado
-        bool estaInicializada() const { return simulacaoInicializada; }
-        bool estaFinalizada() const { return simulacaoFinalizada; }
+
+        // Implementação da interface IObservador (para Pacote)
+        // Chamado quando um pacote tem seu estado atualizado
+        void atualizar(std::shared_ptr<Pacote> pacote) override {
+            // O Simulador pode reagir a atualizações de estado do pacote,
+            // por exemplo, para fins de depuração ou para gerenciar estatísticas.
+            if (parametrosSimulacao.modoDebug) {
+                std::cout << "[OBSERVER] Pacote " << pacote->obterIdUnico()
+                          << " atualizado para estado " << static_cast<int>(pacote->obterEstadoAtual())
+                          << " no tempo " << pacote->obterTempoUltimaAtualizacao()
+                          << ". " << pacote->obterObservacoesUltimaAtualizacao() << std::endl;
+            }
+        }
+
+        // Métodos de acesso
         Timestamp_t obterTempoAtual() const;
-        
-        // Resultados
+
+        // Métodos para geração de relatórios
         void gerarRelatorios() const;
         void salvarEstatisticas() const;
         void salvarEstatisticas(const std::string& arquivo) const;
-        
-        // Componentes (acesso controlado)
-        const Escalonador* obterEscalonador() const { return escalonador.get(); }
-        const RedeArmazens* obterRedeArmazens() const { return redeArmazens.get(); }
-        const SistemaTransporte* obterSistemaTransporte() const { return sistemaTransporte.get(); }
-        const GerenciadorEstatisticas* obterGerenciadorEstatisticas() const { return gerenciadorEstatisticas.get(); }
-        
-    private:
-        // Métodos de inicialização
-        bool carregarTopologia();
-        bool carregarPacotes();
-        void configurarSistemas();
-        void agendarEventosIniciais();
-        
-        // Métodos de execução
-        bool verificarCondicaoFinalizacao();
-        void finalizarSimulacao();
-        void limparRecursos();
-        
-        // Validação
-        bool validarParametros() const;
-        bool validarArquivos() const;
-        bool validarConsistencia() const;
     };
-}
 
-#endif
+} // namespace LogisticSystem
+
+#endif // SIMULADOR_HPP

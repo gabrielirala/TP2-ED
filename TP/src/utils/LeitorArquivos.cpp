@@ -2,114 +2,13 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <stdexcept>
+#include <algorithm> // Para std::remove_if, std::isspace
+#include <limits>    // Para std::numeric_limits
 
 namespace LogisticSystem {
 
-    bool LeitorArquivos::lerTopologia(const std::string& arquivo,
-                                     std::shared_ptr<RedeArmazens> redeArmazens,
-                                     std::shared_ptr<SistemaTransporte> sistemaTransporte,
-                                     const ConfiguracaoSistema& configSistema) {
-        std::ifstream file(arquivo);
-        if (!file.is_open()) {
-            std::cerr << "Erro: Nao foi possivel abrir o arquivo de topologia: " << arquivo << std::endl;
-            return false;
-        }
-
-        std::string line;
-        while (std::getline(file, line)) {
-            std::vector<std::string> tokens = splitString(line, ';');
-            if (tokens.empty()) continue;
-
-            if (tokens[0] == "ARMAZEM" && tokens.size() == 3) {
-                try {
-                    ID_t id = std::stoi(tokens[1]);
-                    std::string nome = tokens[2];
-                    // A capacidade total do armazém é a soma das capacidades das seções.
-                    // Ou pode ser um valor fixo definido na configuração padrão.
-                    // Para simplificar, Armazem será criado com capacidade 0 e seções adicionadas depois.
-                    redeArmazens->adicionarArmazem(id, nome, 0); // Capacidade será ajustada pelas secoes
-                } catch (const std::exception& e) {
-                    std::cerr << "Erro ao parsear linha ARMAZEM: " << line << " - " << e.what() << std::endl;
-                    return false;
-                }
-            } else if (tokens[0] == "SECAO" && tokens.size() == 5) {
-                try {
-                    ID_t armazem_id = std::stoi(tokens[1]);
-                    ID_t destino_secao_id = std::stoi(tokens[2]);
-                    Capacity_t capacidade_secao = std::stoi(tokens[3]);
-                    Distance_t tempo_manipulacao = std::stod(tokens[4]);
-
-                    auto armazem_ptr = redeArmazens->obterArmazem(armazem_id);
-                    if (armazem_ptr) {
-                        armazem_ptr->adicionarSecao(destino_secao_id, capacidade_secao, tempo_manipulacao);
-                        // Atualiza capacidade total do armazém
-                        // armazem_ptr->capacidadeTotal += capacidade_secao; // Se fosse um membro publico
-                    } else {
-                        std::cerr << "Erro: Armazem " << armazem_id << " nao encontrado para adicionar secao." << std::endl;
-                        return false;
-                    }
-                } catch (const std::exception& e) {
-                    std::cerr << "Erro ao parsear linha SECAO: " << line << " - " << e.what() << std::endl;
-                    return false;
-                }
-            } else if (tokens[0] == "ROTA" && tokens.size() == 5) {
-                try {
-                    ID_t origem_id = std::stoi(tokens[1]);
-                    ID_t destino_id = std::stoi(tokens[2]);
-                    Distance_t tempo_transporte = std::stod(tokens[3]);
-                    Capacity_t capacidade_rota = std::stoi(tokens[4]);
-
-                    sistemaTransporte->adicionarRota(origem_id, destino_id, tempo_transporte, capacidade_rota);
-                } catch (const std::exception& e) {
-                    std::cerr << "Erro ao parsear linha ROTA: " << line << " - " << e.what() << std::endl;
-                    return false;
-                }
-            }
-            // Ignorar outras linhas ou tratar como erro de formato
-        }
-
-        // Configurar parâmetros globais do sistema de transporte
-        sistemaTransporte->configurarParametrosGlobais(
-            configSistema.intervaloTransporte,
-            configSistema.tempoTransportePadrao,
-            configSistema.capacidadeTransportePadrao
-        );
-
-        return true;
-    }
-
-    std::vector<std::shared_ptr<Pacote>> LeitorArquivos::lerPacotes(const std::string& arquivo) {
-        std::vector<std::shared_ptr<Pacote>> pacotes;
-        std::ifstream file(arquivo);
-        if (!file.is_open()) {
-            std::cerr << "Erro: Nao foi possivel abrir o arquivo de pacotes: " << arquivo << std::endl;
-            return pacotes;
-        }
-
-        std::string line;
-        while (std::getline(file, line)) {
-            std::vector<std::string> tokens = splitString(line, ';');
-            if (tokens.size() == 7) {
-                try {
-                    ID_t id = std::stoi(tokens[0]);
-                    Timestamp_t postagem = std::stod(tokens[1]);
-                    std::string remetente = tokens[2];
-                    std::string destinatario = tokens[3];
-                    std::string tipo = tokens[4];
-                    ID_t origem = std::stoi(tokens[5]);
-                    ID_t destino = std::stoi(tokens[6]);
-
-                    auto pacote = std::make_shared<Pacote>(id, postagem, remetente,
-                                                          destinatario, tipo, origem, destino);
-                    pacotes.push_back(pacote);
-                } catch (const std::exception& e) {
-                    std::cerr << "Erro ao parsear linha de pacote: " << line << " - " << e.what() << std::endl;
-                }
-            }
-        }
-        return pacotes;
-    }
-
+    // Função auxiliar para dividir strings (já existente, mantida)
     std::vector<std::string> LeitorArquivos::splitString(const std::string& s, char delimiter) {
         std::vector<std::string> tokens;
         std::string token;
@@ -118,6 +17,196 @@ namespace LogisticSystem {
             tokens.push_back(token);
         }
         return tokens;
+    }
+
+    // Auxiliar para ler os 4 parâmetros globais iniciais
+    void LeitorArquivos::lerParametrosGlobais(std::ifstream& arquivo, ParametrosSimulacaoGlobal& parametros) {
+        std::string linha;
+
+        if (std::getline(arquivo, linha)) {
+            parametros.capacidadeTransporteGlobal = std::stoi(linha);
+        } else { throw std::runtime_error("Erro de leitura: capacidadeTransporteGlobal nao encontrada."); }
+
+        if (std::getline(arquivo, linha)) {
+            parametros.latenciaTransporteGlobal = std::stod(linha);
+        } else { throw std::runtime_error("Erro de leitura: latenciaTransporteGlobal nao encontrada."); }
+
+        if (std::getline(arquivo, linha)) {
+            parametros.intervaloTransportesGlobal = std::stod(linha);
+        } else { throw std::runtime_error("Erro de leitura: intervaloTransportesGlobal nao encontrada."); }
+
+        if (std::getline(arquivo, linha)) {
+            parametros.custoRemocaoGlobal = std::stod(linha);
+        } else { throw std::runtime_error("Erro de leitura: custoRemocaoGlobal nao encontrada."); }
+    }
+
+    // Auxiliar para ler o número de armazéns
+    int LeitorArquivos::lerNumeroArmazens(std::ifstream& arquivo) {
+        std::string linha;
+        if (std::getline(arquivo, linha)) {
+            return std::stoi(linha);
+        }
+        throw std::runtime_error("Erro de leitura: numeroarmazens nao encontrado.");
+    }
+
+    // Auxiliar para configurar armazéns e rotas com base na matriz de adjacência
+    void LeitorArquivos::configurarArmazensERotas(
+        std::ifstream& arquivo, int numArmazens,
+        std::shared_ptr<RedeArmazens> redeArmazens,
+        std::shared_ptr<SistemaTransporte> sistemaTransporte,
+        const ParametrosSimulacaoGlobal& parametros) {
+
+        // Criar Armazéns (IDs de 0 a numArmazens-1)
+        for (ID_t i = 0; i < numArmazens; ++i) {
+            // Capacidade total do armazém e capacidade da seção não são especificadas no novo enunciado.
+            // Usaremos capacidade infinita (max_int) para o armazém e seções.
+            std::string nomePadrao = "Armazem_" + std::to_string(i);
+            redeArmazens->adicionarArmazem(i, nomePadrao, std::numeric_limits<Capacity_t>::max());
+        }
+
+        // Ler a matriz de adjacência e configurar rotas e seções
+        for (ID_t i = 0; i < numArmazens; ++i) {
+            std::string linhaMatriz;
+            if (std::getline(arquivo, linhaMatriz)) {
+                // Remover espaços em branco, se houver, antes de processar a linha da matriz
+                linhaMatriz.erase(std::remove_if(linhaMatriz.begin(), linhaMatriz.end(), ::isspace), linhaMatriz.end());
+
+                if (linhaMatriz.length() != static_cast<size_t>(numArmazens)) {
+                    throw std::runtime_error("Erro de leitura: linha " + std::to_string(i) + " da matriz de adjacencia tem tamanho incorreto.");
+                }
+
+                for (ID_t j = 0; j < numArmazens; ++j) {
+                    if (linhaMatriz[j] == '1') {
+                        // Adicionar aresta no Grafo (RedeArmazens já faz isso internamente)
+                        // Não precisamos chamar redeArmazens->adicionarAresta(i, j); aqui,
+                        // pois a lógica de criação de rota em SistemaTransporte já adiciona a aresta ao Grafo.
+
+                        // Configurar a seção no armazém de origem para o destino
+                        // Adicionar seção apenas se ainda não existir (para evitar duplicação em adjacências bidirecionais)
+                        if (!redeArmazens->obterArmazem(i)->temSecao(j)) {
+                            redeArmazens->obterArmazem(i)->adicionarSecao(
+                                j, std::numeric_limits<Capacity_t>::max(), parametros.custoRemocaoGlobal);
+                        }
+
+                        // Adicionar rota de transporte (se não for para o mesmo armazém e se ainda não existir)
+                        // A topologia é bidirecional, então só precisamos adicionar uma vez para cada par (i, j)
+                        // ou garantir que sistemaTransporte::adicionarRota lida com a bidirecionalidade ou evita duplicação
+                        if (i != j && !sistemaTransporte->existeRota(i, j) && !sistemaTransporte->existeRota(j, i)) {
+                             sistemaTransporte->adicionarRota(
+                                i, j, parametros.latenciaTransporteGlobal, parametros.capacidadeTransporteGlobal);
+                             // Como a topologia é bidirecional, também adicionamos a rota inversa
+                             sistemaTransporte->adicionarRota(
+                                j, i, parametros.latenciaTransporteGlobal, parametros.capacidadeTransporteGlobal);
+                        }
+                    }
+                }
+            } else {
+                throw std::runtime_error("Erro de leitura: matriz de adjacencia incompleta ou linha ausente para armazem " + std::to_string(i) + ".");
+            }
+        }
+    }
+
+    // Função principal para ler a configuração global e a topologia
+    ParametrosSimulacaoGlobal LeitorArquivos::lerConfiguracaoESetup(
+        const std::string& nomeArquivo,
+        std::shared_ptr<RedeArmazens> redeArmazens,
+        std::shared_ptr<SistemaTransporte> sistemaTransporte) {
+
+        std::ifstream arquivo(nomeArquivo);
+        if (!arquivo.is_open()) { // Corrigido de 'file' para 'arquivo'
+            throw std::runtime_error("Nao foi possivel abrir o arquivo de entrada: " + nomeArquivo);
+        }
+
+        ParametrosSimulacaoGlobal parametros;
+
+        lerParametrosGlobais(arquivo, parametros); // Lê os 4 parâmetros iniciais
+
+        int numArmazens = lerNumeroArmazens(arquivo); // Lê o número de armazéns
+
+        // Configura armazéns e rotas baseado na matriz de adjacência
+        configurarArmazensERotas(arquivo, numArmazens, redeArmazens, sistemaTransporte, parametros);
+
+        // Nota: O arquivo ifstream 'arquivo' está agora posicionado após a matriz de adjacência.
+        // A função lerPacotes precisará reabrir o arquivo e pular o que já foi lido
+        // para encontrar a seção de pacotes, ou este método deveria retornar o ifstream.
+        // Para a simplicidade, vamos assumir que lerPacotes reabre e avança.
+
+        return parametros;
+    }
+
+    // Auxiliar para pular o cabeçalho e a matriz de adjacência na função lerPacotes
+    void LeitorArquivos::pularSecaoConfiguracao(std::ifstream& arquivo) {
+        std::string linha;
+        // Pular 4 linhas de parâmetros globais
+        for (int i = 0; i < 4; ++i) {
+            if (!std::getline(arquivo, linha)) {
+                throw std::runtime_error("Erro: arquivo de entrada muito curto, faltando parametros iniciais.");
+            }
+        }
+
+        // Pular a linha do numeroarmazens e ler o seu valor
+        if (!std::getline(arquivo, linha)) {
+            throw std::runtime_error("Erro: arquivo de entrada muito curto, faltando numeroarmazens.");
+        }
+        int numArmazensParaPular = std::stoi(linha);
+
+        // Pular as linhas da matriz de adjacência
+        for (int i = 0; i < numArmazensParaPular; ++i) {
+            if (!std::getline(arquivo, linha)) {
+                throw std::runtime_error("Erro: arquivo de entrada muito curto, faltando linhas da matriz de adjacencia.");
+            }
+        }
+    }
+
+    // Auxiliar para ler o número de pacotes
+    int LeitorArquivos::lerNumeroPacotes(std::ifstream& arquivo) {
+        std::string linha;
+        if (std::getline(arquivo, linha)) {
+            return std::stoi(linha);
+        }
+        throw std::runtime_error("Erro de leitura: numeropacotes nao encontrado na secao de pacotes.");
+    }
+
+    // Auxiliar para ler os dados de cada pacote
+    std::vector<std::shared_ptr<Pacote>> LeitorArquivos::lerDadosPacotes(
+        std::ifstream& arquivo, int numeroPacotes) {
+        
+        std::vector<std::shared_ptr<Pacote>> pacotes;
+        for (int i = 0; i < numeroPacotes; ++i) {
+            std::string linha;
+            if (std::getline(arquivo, linha)) {
+                std::istringstream iss(linha);
+                Timestamp_t tempoChegada;
+                ID_t idPacote, armazemOrigem, armazemDestino;
+                std::string dummy_pac, dummy_org, dummy_dst; // Para strings "pac", "org", "dst"
+
+                // Exemplo: "1.0 pac 0 org 1 dst 3"
+                iss >> tempoChegada >> dummy_pac >> idPacote >> dummy_org >> armazemOrigem >> dummy_dst >> armazemDestino;
+
+                // Criar e adicionar o pacote. Assumindo que o construtor Pacote agora aceita esses 4 parâmetros.
+                pacotes.push_back(std::make_shared<Pacote>(idPacote, tempoChegada, armazemOrigem, armazemDestino));
+            } else {
+                throw std::runtime_error("Erro de leitura: pacotes incompletos ou faltando. Esperado " + std::to_string(numeroPacotes) + " pacotes.");
+            }
+        }
+        return pacotes;
+    }
+
+    // Função para ler a seção de pacotes do arquivo de entrada principal
+    // (Esta é a sobrecarga que será chamada pelo Simulador)
+    std::vector<std::shared_ptr<Pacote>> LeitorArquivos::lerPacotes(
+        const std::string& nomeArquivo, int& numeroPacotesOut) {
+
+        std::ifstream arquivo(nomeArquivo);
+        if (!arquivo.is_open()) {
+            throw std::runtime_error("Nao foi possivel reabrir o arquivo de entrada para pacotes: " + nomeArquivo);
+        }
+
+        pularSecaoConfiguracao(arquivo); // Pula a parte de configuração já lida
+
+        numeroPacotesOut = lerNumeroPacotes(arquivo); // Lê o número de pacotes
+
+        return lerDadosPacotes(arquivo, numeroPacotesOut); // Lê os dados dos pacotes
     }
 
 } // namespace LogisticSystem

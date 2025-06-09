@@ -6,7 +6,8 @@
 #include <memory>
 #include <chrono>
 
-namespace LogisticSystem {
+namespace LogisticSystem 
+{
     using ID_t = int;
     using Timestamp_t = double;
     using Capacity_t = int;
@@ -42,6 +43,13 @@ namespace LogisticSystem {
         Timestamp_t atrasoTotal;
         int numeroTransferencias;
         bool gargaloDetectado;
+    };
+
+    struct ParametrosSimulacao {
+    Capacity_t capacidadeTransporteGlobal;
+    Distance_t latenciaTransporteGlobal;
+    Timestamp_t intervaloTransportesGlobal;
+    Distance_t custoRemocaoGlobal;
     };
 }
 

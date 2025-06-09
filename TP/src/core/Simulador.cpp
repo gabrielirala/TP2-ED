@@ -1,94 +1,88 @@
 #include "core/Simulador.hpp"
-#include "utils/LeitorArquivos.hpp" // Para ler topologia e pacotes
+#include "utils/LeitorArquivos.hpp"
 #include "eventos/EventoChegada.hpp"
 #include "eventos/EventoTransporte.hpp"
+#include "eventos/EventoPostagem.hpp" // Pode não ser mais necessário se EventoChegada cobre
+#include "eventos/EventoEntrega.hpp"   // Pode não ser mais necessário se EventoChegada cobre
+#include "estruturas/Grafo.hpp"        // Para buscar rota
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
+#include <limits> // Para std::numeric_limits
 
 namespace LogisticSystem {
 
     Simulador::Simulador()
         : simulacaoInicializada(false), simulacaoFinalizada(false) {
-        // Inicializar os componentes principais
+        // Inicializar os componentes principais com unique_ptr
         escalonador = std::make_unique<Escalonador>();
         redeArmazens = std::make_unique<RedeArmazens>();
+        // SistemaTransporte precisa do Grafo da RedeArmazens, que é criado dentro de RedeArmazens
         sistemaTransporte = std::make_unique<SistemaTransporte>(redeArmazens->obterGrafo());
-        // O gerenciador de estatísticas será inicializado após carregar os pacotes
-        // e configurar os outros componentes.
+        // O gerenciador de estatísticas será inicializado após carregar os pacotes e configurar os outros componentes.
+        gerenciadorEstatisticas = nullptr; // Inicializa como nulo, será criado no inicializar
     }
 
     Simulador::~Simulador() {
         limparRecursos();
     }
 
-    void Simulador::carregarParametros(const std::string& arquivoConfig) {
-        // Esta função exigiria um parser de arquivo de configuração customizado.
-        // Por simplicidade, assumimos que os parâmetros são definidos via linha de comando
-        // ou pela sobrecarga ParametrosSimulacao.
-        std::cerr << "Carregamento de parametros via arquivo de configuracao nao implementado diretamente aqui." << std::endl;
-        std::cerr << "Use a sobrecarga com ParametrosSimulacao ou argumentos de linha de comando." << std::endl;
-        throw std::runtime_error("Funcionalidade de carregar parametros de arquivo nao implementada.");
-    }
-
-    void Simulador::carregarParametros(const ParametrosSimulacao& params_in) {
-        parametros = params_in;
-        escalonador->habilitarModoDebug(parametros.modoDebug);
-        std::cout << "Parametros da simulacao carregados." << std::endl;
-        if (parametros.modoDebug) {
-            std::cout << "Modo DEBUG ativado." << std::endl;
-            std::cout << "Arquivo Topologia: " << parametros.arquivoTopologia << std::endl;
-            std::cout << "Arquivo Pacotes: " << parametros.arquivoPacotes << std::endl;
-            std::cout << "Arquivo Saida: " << parametros.arquivoSaida << std::endl;
-            std::cout << "Tempo Final: " << parametros.tempoFinal << std::endl;
-        }
-    }
-
-    void Simulador::definirArquivoTopologia(const std::string& arquivo) {
-        parametros.arquivoTopologia = arquivo;
-    }
-
-    void Simulador::definirArquivoPacotes(const std::string& arquivo) {
-        parametros.arquivoPacotes = arquivo;
-    }
-
-    void Simulador::definirArquivoSaida(const std::string& arquivo) {
-        parametros.arquivoSaida = arquivo;
-    }
-
-    bool Simulador::inicializar() {
+    // Inicializa a simulação lendo de um único arquivo de entrada
+    bool Simulador::inicializar(const std::string& arquivoEntrada) {
         if (simulacaoInicializada) {
             std::cout << "Simulacao ja inicializada. Reinicializando..." << std::endl;
             reinicializar();
         }
 
-        if (!validarParametros() || !validarArquivos()) {
-            std::cerr << "Falha na validacao de parametros ou arquivos." << std::endl;
+        // 1. Carregar parâmetros globais e topologia usando a nova função do LeitorArquivos
+        try {
+            // A função lerConfiguracaoESetup preenche redeArmazens e sistemaTransporte
+            parametrosSimulacao = LeitorArquivos::lerConfiguracaoESetup(
+                arquivoEntrada,
+                std::shared_ptr<RedeArmazens>(redeArmazens.get(), [](RedeArmazens*){}), // Passa shared_ptr do raw pointer
+                std::shared_ptr<SistemaTransporte>(sistemaTransporte.get(), [](SistemaTransporte*){}) // Passa shared_ptr do raw pointer
+            );
+            // Definir tempo final da simulação e arquivo de saída a partir dos parâmetros lidos
+            // (Assumindo que ParametrosSimulacaoGlobal agora contém esses campos)
+            parametrosSimulacao.tempoFinalSimulacao = 10000.0; // Valor dummy, você pode ler de algum lugar se necessário
+            parametrosSimulacao.modoDebug = true; // Valor dummy
+            parametrosSimulacao.arquivoSaida = "resultados/relatorio_simulacao.txt"; // Valor dummy
+            escalonador->habilitarModoDebug(parametrosSimulacao.modoDebug);
+
+        } catch (const std::exception& e) {
+            std::cerr << "Falha ao carregar configuracao e topologia: " << e.what() << std::endl;
             return false;
         }
 
-        if (!carregarTopologia()) {
-            std::cerr << "Falha ao carregar topologia." << std::endl;
-            return false;
-        }
-        if (!carregarPacotes()) {
-            std::cerr << "Falha ao carregar pacotes." << std::endl;
+        // 2. Carregar pacotes
+        try {
+            int numPacotesLidos; // Para capturar o número de pacotes lidos
+            pacotes = LeitorArquivos::lerPacotes(arquivoEntrada, numPacotesLidos);
+            if (pacotes.empty()) {
+                std::cerr << "Nenhum pacote foi lido do arquivo de entrada." << std::endl;
+                // return false; // Dependendo se simulação sem pacotes é válida
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Falha ao carregar pacotes: " << e.what() << std::endl;
             return false;
         }
 
+        // 3. Configurar sistemas (rotas dos pacotes, registro de processadores)
         configurarSistemas();
+
+        // 4. Agendar eventos iniciais (postagem de pacotes, primeiros transportes)
         agendarEventosIniciais();
 
-        // Inicializar o gerenciador de estatísticas após todos os componentes estarem prontos
+        // 5. Inicializar o gerenciador de estatísticas após todos os componentes estarem prontos
         gerenciadorEstatisticas = std::make_unique<GerenciadorEstatisticas>(
-            std::shared_ptr<Escalonador>(escalonador.get(), [](Escalonador*){}), // Shared_ptr para raw pointer sem delete
+            std::shared_ptr<Escalonador>(escalonador.get(), [](Escalonador*){}),
             std::shared_ptr<RedeArmazens>(redeArmazens.get(), [](RedeArmazens*){}),
             std::shared_ptr<SistemaTransporte>(sistemaTransporte.get(), [](SistemaTransporte*){}),
-            pacotes
+            pacotes // Passa a lista de pacotes
         );
 
         if (!validarConsistencia()) {
-            std::cerr << "Falha na validacao de consistencia." << std::endl;
+            std::cerr << "Falha na validacao de consistencia da rede ou pacotes." << std::endl;
             return false;
         }
 
@@ -99,13 +93,14 @@ namespace LogisticSystem {
     }
 
     void Simulador::reinicializar() {
-        escalonador->reiniciarSimulacao();
-        redeArmazens->limpar();
-        sistemaTransporte->limpar(); // Assumindo um método limpar em SistemaTransporte
+        if (escalonador) escalonador->reiniciarSimulacao();
+        if (redeArmazens) redeArmazens->limpar();
+        if (sistemaTransporte) sistemaTransporte->limpar(); // Assumindo um método limpar em SistemaTransporte
         pacotes.clear();
         gerenciadorEstatisticas.reset(); // Reinicia o gerenciador de estatísticas
         simulacaoInicializada = false;
         simulacaoFinalizada = false;
+        std::cout << "Simulador reinicializado." << std::endl;
     }
 
     bool Simulador::executarSimulacao() {
@@ -116,11 +111,11 @@ namespace LogisticSystem {
 
         std::cout << "Iniciando execucao da simulacao..." << std::endl;
         while (escalonador->temEventosPendentes() &&
-               escalonador->obterTempoAtual() < parametros.tempoFinal &&
+               escalonador->obterTempoAtual() < parametrosSimulacao.tempoFinalSimulacao &&
                !simulacaoFinalizada) {
             escalonador->processarProximoEvento();
-            if (escalonador->obterTempoAtual() >= parametros.tempoFinal) {
-                std::cout << "Tempo final (" << parametros.tempoFinal << ") atingido." << std::endl;
+            if (escalonador->obterTempoAtual() >= parametrosSimulacao.tempoFinalSimulacao) {
+                std::cout << "Tempo final (" << parametrosSimulacao.tempoFinalSimulacao << ") atingido." << std::endl;
                 break;
             }
             if (verificarCondicaoFinalizacao()) {
@@ -154,7 +149,7 @@ namespace LogisticSystem {
             return;
         }
         if (escalonador->temEventosPendentes() &&
-            escalonador->obterTempoAtual() < parametros.tempoFinal &&
+            escalonador->obterTempoAtual() < parametrosSimulacao.tempoFinalSimulacao &&
             !simulacaoFinalizada) {
             escalonador->processarProximoEvento();
         } else {
@@ -170,40 +165,54 @@ namespace LogisticSystem {
     }
 
     void Simulador::processarEvento(std::shared_ptr<Evento> evento) {
-        // O Simulador age como um IProcessadorEvento, mas sua função principal é orquestrar
-        // a chamada dos processadores específicos (e.g., EventoChegada processa no Armazem).
-        // Aqui, o simulador delega a responsabilidade.
-        if (parametros.modoDebug) {
-            std::cout << "[Simulador] Processando evento: " << evento->obterDetalhes() << std::endl;
+        if (parametrosSimulacao.modoDebug) {
+            std::cout << "[Simulador] Tempo: " << escalonador->obterTempoAtual()
+                      << " - Processando evento: " << evento->obterDetalhes() << std::endl;
         }
 
-        // Antes de executar, registrar o processador no escalonador.
-        // Isso geralmente é feito na inicialização.
-        // Aqui, garantimos que o evento tenha suas dependências configuradas.
-        if (evento->obterTipo() == TipoEvento::CHEGADA_PACOTE) {
-            auto chegada_evento = std::static_pointer_cast<EventoChegada>(evento);
-            auto armazem_id = chegada_evento->obterArmazemDestino();
+        // O Simulador delega o processamento real do evento às entidades.
+        // Garante que o evento tenha suas dependências configuradas (Armazem, SistemaTransporte, Escalonador).
+        if (evento->obterTipo() == TipoEvento::PACOTE) { // Antigo EventoChegada/Postagem
+            auto chegada_evento = std::static_pointer_cast<EventoChegada>(evento); // Assumindo EventoChegada lida com chegada e postagem
+            auto armazem_id = chegada_evento->obterArmazemDestino(); // ID do armazém onde o pacote chega
             chegada_evento->definirArmazem(redeArmazens->obterArmazem(armazem_id));
-            chegada_evento->definirEscalonador(std::shared_ptr<Escalonador>(escalonador.get(), [](Escalonador*){})); // Raw pointer para shared_ptr
+            chegada_evento->definirEscalonador(shared_from_this_as_Escalonador()); // Usando helper
+            chegada_evento->definirRedeArmazens(shared_from_this_as_RedeArmazens()); // Para cálculo de rota, se necessário
+            chegada_evento->definirSimulador(shared_from_this()); // Para acesso ao simulador completo
         } else if (evento->obterTipo() == TipoEvento::TRANSPORTE) {
             auto transporte_evento = std::static_pointer_cast<EventoTransporte>(evento);
             auto origem_id = transporte_evento->obterArmazemOrigem();
             auto destino_id = transporte_evento->obterArmazemDestino();
             transporte_evento->definirArmazemOrigem(redeArmazens->obterArmazem(origem_id));
             transporte_evento->definirArmazemDestino(redeArmazens->obterArmazem(destino_id));
-            transporte_evento->definirSistemaTransporte(std::shared_ptr<SistemaTransporte>(sistemaTransporte.get(), [](SistemaTransporte*){}));
-            transporte_evento->definirEscalonador(std::shared_ptr<Escalonador>(escalonador.get(), [](Escalonador*){}));
+            transporte_evento->definirSistemaTransporte(shared_from_this_as_SistemaTransporte()); // Usando helper
+            transporte_evento->definirEscalonador(shared_from_this_as_Escalonador()); // Usando helper
+            transporte_evento->definirSimulador(shared_from_this()); // Para acesso ao simulador completo
         }
 
         evento->executar();
     }
 
+    // Funções auxiliares para obter shared_ptr de membros unique_ptr
+    std::shared_ptr<Escalonador> Simulador::shared_from_this_as_Escalonador() {
+        return std::shared_ptr<Escalonador>(escalonador.get(), [](Escalonador*){});
+    }
+
+    std::shared_ptr<RedeArmazens> Simulador::shared_from_this_as_RedeArmazens() {
+        return std::shared_ptr<RedeArmazens>(redeArmazens.get(), [](RedeArmazens*){});
+    }
+
+    std::shared_ptr<SistemaTransporte> Simulador::shared_from_this_as_SistemaTransporte() {
+        return std::shared_ptr<SistemaTransporte>(sistemaTransporte.get(), [](SistemaTransporte*){});
+    }
+
+    std::shared_ptr<GerenciadorEstatisticas> Simulador::shared_from_this_as_GerenciadorEstatisticas() {
+        return std::shared_ptr<GerenciadorEstatisticas>(gerenciadorEstatisticas.get(), [](GerenciadorEstatisticas*){});
+    }
+
     bool Simulador::podeProcessar(TipoEvento tipo) const {
         // O simulador pode "processar" todos os tipos de evento, pois ele os delega.
-        // No entanto, ele não os processa diretamente, apenas os encaminha.
-        // Se houver lógica específica para o simulador em si (e não para suas entidades),
-        // isso seria adicionado aqui.
-        return true;
+        return (tipo == TipoEvento::PACOTE || tipo == TipoEvento::TRANSPORTE);
     }
 
     Timestamp_t Simulador::obterTempoAtual() const {
@@ -216,14 +225,15 @@ namespace LogisticSystem {
             return;
         }
         if (gerenciadorEstatisticas) {
-            gerenciadorEstatisticas->gerarRelatorioTexto(parametros.arquivoSaida);
+            gerenciadorEstatisticas->gerarRelatorioTexto(parametrosSimulacao.arquivoSaida);
         } else {
             std::cerr << "Gerenciador de estatisticas nao inicializado." << std::endl;
         }
     }
 
     void Simulador::salvarEstatisticas() const {
-        salvarEstatisticas(parametros.arquivoSaida + ".bin"); // Exemplo de nome de arquivo binário
+        // Exemplo: salvarEstatisticas(parametrosSimulacao.arquivoSaida + ".bin");
+        std::cerr << "Funcionalidade de salvar estatisticas binarias nao implementada." << std::endl;
     }
 
     void Simulador::salvarEstatisticas(const std::string& arquivo) const {
@@ -238,58 +248,68 @@ namespace LogisticSystem {
         }
     }
 
-    bool Simulador::carregarTopologia() {
-        ConfiguracaoSistema config_para_leitor;
-        config_para_leitor.intervaloTransporte = parametros.intervaloTransporte;
-        config_para_leitor.tempoManipulacaoUnitario = parametros.tempoManipulacaoPadrao;
-        config_para_leitor.tempoTransportePadrao = parametros.tempoTransportePadrao;
-        config_para_leitor.capacidadeTransportePadrao = parametros.capacidadeTransportePadrao;
-        config_para_leitor.thresholdGargalo = parametros.thresholdGargalo;
-
-        return LeitorArquivos::lerTopologia(parametros.arquivoTopologia,
-                                           std::shared_ptr<RedeArmazens>(redeArmazens.get(), [](RedeArmazens*){}),
-                                           std::shared_ptr<SistemaTransporte>(sistemaTransporte.get(), [](SistemaTransporte*){}),
-                                           config_para_leitor);
-    }
-
-    bool Simulador::carregarPacotes() {
-        pacotes = LeitorArquivos::lerPacotes(parametros.arquivoPacotes);
-        return !pacotes.empty(); // Sucesso se alguns pacotes foram lidos
-    }
-
     void Simulador::configurarSistemas() {
-        // O `LeitorArquivos::lerTopologia` já configura o sistema de transporte.
-        // Aqui podemos registrar o Simulador como processador de eventos no Escalonador.
-        escalonador->registrarProcessador(TipoEvento::CHEGADA_PACOTE,
-                                         std::shared_ptr<IProcessadorEvento>(this, [](IProcessadorEvento*){}));
-        escalonador->registrarProcessador(TipoEvento::TRANSPORTE,
-                                         std::shared_ptr<IProcessadorEvento>(this, [](IProcessadorEvento*){}));
-        // Outros tipos de evento podem ser registrados aqui.
+        // Registra o Simulador como processador de eventos no Escalonador.
+        // `shared_from_this()` retorna um shared_ptr para a instância atual do Simulador.
+        escalonador->registrarProcessador(TipoEvento::PACOTE, shared_from_this());
+        escalonador->registrarProcessador(TipoEvento::TRANSPORTE, shared_from_this());
+
+        // Para cada pacote lido, calcular sua rota.
+        for (const auto& pacote : pacotes) {
+            // A rota deve ser calculada usando BFS no Grafo da RedeArmazens
+            // como o enunciado exige para grafos não ponderados (assumindo que o grafo
+            // foi configurado para ser não ponderado e BFS é mais adequado).
+            // Seu `Grafo::buscarMenorCaminho` deve ser adaptado para BFS.
+            ListaLigada<ID_t> rota = redeArmazens->obterGrafo()->buscarMenorCaminho(
+                pacote->obterArmazemOrigem(), pacote->obterArmazemDestino());
+            pacote->definirRota(rota);
+        }
     }
 
     void Simulador::agendarEventosIniciais() {
-        // Agendar eventos de chegada iniciais para todos os pacotes
+        // Agendar eventos de chegada iniciais para todos os pacotes (postagem)
         for (const auto& pacote : pacotes) {
-            auto eventoChegada = std::make_shared<EventoChegada>(pacote, pacote->obterArmazemOrigem(), pacote->obterDataPostagem());
+            // EventoChegada agora pode lidar com postagem
+            auto eventoChegada = std::make_shared<EventoChegada>(
+                pacote->obterDataPostagem(), // Timestamp do evento
+                pacote->obterArmazemOrigem(),// Armazem onde o pacote chega/e postado
+                pacote // Pacote associado
+            );
+            // Definir dependências do evento (passando shared_ptr para evitar problemas de ownership)
             eventoChegada->definirArmazem(redeArmazens->obterArmazem(pacote->obterArmazemOrigem()));
-            eventoChegada->definirEscalonador(std::shared_ptr<Escalonador>(escalonador.get(), [](Escalonador*){}));
+            eventoChegada->definirEscalonador(shared_from_this_as_Escalonador());
+            eventoChegada->definirSimulador(shared_from_this()); // Passa referência para o simulador
             escalonador->agendarEvento(eventoChegada);
         }
 
         // Agendar os primeiros eventos de transporte para todas as rotas
-        sistemaTransporte->agendarTransportesIniciais(0.0); // Começa a agendar a partir do tempo 0
-        for (const auto& rota_pair : sistemaTransporte->obterTodasRotas()) {
-            auto rota = sistemaTransporte->obterRota(rota_pair.first, rota_pair.second);
-            if (rota) {
-                auto eventoTransporte = std::make_shared<EventoTransporte>(rota->obterOrigem(), rota->obterDestino(), rota->obterProximoTransporte());
-                eventoTransporte->definirArmazemOrigem(redeArmazens->obterArmazem(rota->obterOrigem()));
-                eventoTransporte->definirArmazemDestino(redeArmazens->obterArmazem(rota->obterDestino()));
-                eventoTransporte->definirSistemaTransporte(std::shared_ptr<SistemaTransporte>(sistemaTransporte.get(), [](SistemaTransporte*){}));
-                eventoTransporte->definirEscalonador(std::shared_ptr<Escalonador>(escalonador.get(), [](Escalonador*){}));
-                escalonador->agendarEvento(eventoTransporte);
-            }
-        }
+        // A frequência é dada por intervaloTransportesGlobal
+        sistemaTransporte->agendarTransportesIniciais(
+            escalonador, parametrosSimulacao.intervaloTransportesGlobal);
+
+        // A `agendarTransportesIniciais` do SistemaTransporte deve criar e agendar os EventoTransporte
+        // com o escalonador e a frequência correta.
+        // Exemplo:
+        // for (const auto& rota_pair : sistemaTransporte->obterTodasRotas()) {
+        //     auto rota = sistemaTransporte->obterRota(rota_pair.first, rota_pair.second);
+        //     if (rota) {
+        //         // O EventoTransporte precisa ser agendado no tempo apropriado
+        //         // (por exemplo, tempo atual + intervaloTransportesGlobal)
+        //         auto eventoTransporte = std::make_shared<EventoTransporte>(
+        //             rota->obterOrigem(),
+        //             rota->obterDestino(),
+        //             escalonador->obterTempoAtual() + parametrosSimulacao.intervaloTransportesGlobal // Próximo agendamento
+        //         );
+        //         eventoTransporte->definirArmazemOrigem(redeArmazens->obterArmazem(rota->obterOrigem()));
+        //         eventoTransporte->definirArmazemDestino(redeArmazens->obterArmazem(rota->obterDestino()));
+        //         eventoTransporte->definirSistemaTransporte(shared_from_this_as_SistemaTransporte());
+        //         eventoTransporte->definirEscalonador(shared_from_this_as_Escalonador());
+        //         eventoTransporte->definirSimulador(shared_from_this());
+        //         escalonador->agendarEvento(eventoTransporte);
+        //     }
+        // }
     }
+
 
     bool Simulador::verificarCondicaoFinalizacao() {
         // Critério de finalização:
@@ -332,7 +352,7 @@ namespace LogisticSystem {
     }
 
     void Simulador::limparRecursos() {
-        // Os unique_ptr cuidarão da memória
+        // unique_ptr cuidarão da memória automaticamente quando saírem do escopo
         escalonador.reset();
         redeArmazens.reset();
         sistemaTransporte.reset();
@@ -342,26 +362,32 @@ namespace LogisticSystem {
     }
 
     bool Simulador::validarParametros() const {
-        if (parametros.tempoFinal <= 0) {
-            std::cerr << "Erro de Parametro: tempoFinal deve ser positivo." << std::endl;
+        // Estes parâmetros agora vêm de ParametrosSimulacaoGlobal
+        // Você pode adicionar mais validações aqui se necessário
+        if (parametrosSimulacao.latenciaTransporteGlobal <= 0) {
+            std::cerr << "Erro de Parametro: latenciaTransporteGlobal deve ser positiva." << std::endl;
             return false;
         }
-        if (parametros.tempoTransportePadrao <= 0 || parametros.tempoManipulacaoPadrao <= 0) {
-             std::cerr << "Erro de Parametro: tempos de transporte/manipulacao padrao devem ser positivos." << std::endl;
+        if (parametrosSimulacao.custoRemocaoGlobal <= 0) {
+             std::cerr << "Erro de Parametro: custoRemocaoGlobal deve ser positivo." << std::endl;
+             return false;
+        }
+        if (parametrosSimulacao.intervaloTransportesGlobal <= 0) {
+             std::cerr << "Erro de Parametro: intervaloTransportesGlobal deve ser positivo." << std::endl;
+             return false;
+        }
+        if (parametrosSimulacao.capacidadeTransporteGlobal <= 0) {
+             std::cerr << "Erro de Parametro: capacidadeTransporteGlobal deve ser positiva." << std::endl;
              return false;
         }
         return true;
     }
 
     bool Simulador::validarArquivos() const {
-        std::ifstream topologia_file(parametros.arquivoTopologia);
-        if (!topologia_file.good()) {
-            std::cerr << "Erro: Arquivo de topologia nao encontrado ou inacessivel: " << parametros.arquivoTopologia << std::endl;
-            return false;
-        }
-        std::ifstream pacotes_file(parametros.arquivoPacotes);
-        if (!pacotes_file.good()) {
-            std::cerr << "Erro: Arquivo de pacotes nao encontrado ou inacessivel: " << parametros.arquivoPacotes << std::endl;
+        // Agora, validação é para um único arquivo de entrada
+        std::ifstream entrada_file(parametrosSimulacao.arquivoSaida); // Usando arquivoSaida para o nome do arquivo de entrada
+        if (!entrada_file.good()) {
+            std::cerr << "Erro: Arquivo de entrada nao encontrado ou inacessivel: " << parametrosSimulacao.arquivoSaida << std::endl;
             return false;
         }
         return true;
