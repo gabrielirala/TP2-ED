@@ -1,6 +1,7 @@
 #include "entidades/Armazem.hpp"
-#include <algorithm> // Para std::remove_if
+#include <algorithm> // Para std::min, std::remove_if, std::reverse
 #include <numeric>   // Para std::accumulate
+#include <vector>    // Incluído explicitamente para std::vector, se já não estivesse
 
 namespace LogisticSystem {
 
@@ -49,51 +50,64 @@ namespace LogisticSystem {
     std::vector<std::shared_ptr<Pacote>> Secao::selecionarPacotesMaisAntigos(
         Capacity_t quantidade, Timestamp_t timestamp) {
         std::vector<std::shared_ptr<Pacote>> pacotes_selecionados;
-        if (quantidade <= 0 || vazia()) {
+
+        if (quantidade <= 0 || pacotes.vazia()) {
             return pacotes_selecionados;
         }
 
-        // Para selecionar os "mais antigos" de uma pilha, precisamos iterar do final da pilha
-        // (base, onde os mais antigos foram colocados se a pilha funciona como uma fila em FIFO)
-        // ou, se a pilha é LIFO, os "mais antigos" são os que estão na base.
-        // Nossa Pilha LIFO adiciona no início, então os pacotes mais antigos estão mais para a base.
-        // A lógica de "selecionar mais antigos" para transporte geralmente implica em FIFO.
-        // Se a Pilha está sendo usada como LIFO, "mais antigos" significa os que estão mais abaixo.
-
-        // Dada a implementação de Pilha: o topo é o elemento mais recente.
-        // Os elementos mais antigos estão na base da pilha.
-        // Para selecionar "quantidade" pacotes mais antigos, precisaríamos
-        // de uma forma eficiente de acessar/remover a base da pilha (FIFO)
-        // ou ter que remover todos os elementos acima (LIFO).
-        // Se a Pilha não suporta FIFO, a seleção dos mais antigos é um problema.
-
-        // Assumindo que "Pilha" aqui na verdade age mais como um "buffer" ou "fila"
-        // onde os "mais antigos" podem ser acessados:
-        // A implementação atual da Pilha permite `obterElemento(posicao)`.
-        // Os pacotes mais antigos serão os que estão nas posições mais altas da pilha (mais próximos da base).
-
-        size_t num_pacotes_para_remover = std::min((size_t)quantidade, pacotes.tamanho());
-        if (num_pacotes_para_remover == 0) return {};
-
-        // Para pegar os mais antigos de uma pilha LIFO, temos que desempilhar os mais recentes
-        // até chegar neles. Ou, se a pilha for tratada como uma lista para seleção:
-        // Aqui, vou usar a Pilha como um buffer e remover os N primeiros elementos do TOPO
-        // (ou seja, os mais recentes). Se "mais antigos" significa o da base, a Pilha não é ideal.
-        // Mas se a regra de negócio for "enviar os N pacotes que estão disponíveis para transporte"
-        // e a "disponibilidade" significa que estão no topo da pilha, então:
-        for (size_t i = 0; i < num_pacotes_para_remover; ++i) {
-            // Em uma pilha LIFO, `pop` remove o mais recente.
-            // Se queremos os "mais antigos", é um problema de design da estrutura ou da regra.
-            // Para continuar, vamos assumir que queremos os N pacotes do topo da pilha (os mais recentes a entrar).
-            // A interpretação de "mais antigos" em uma pilha LIFO é contra-intuitiva.
-            // Se o objetivo é FIFO, a estrutura deveria ser uma fila.
-
-            // Por simplicidade e para fazer a simulação avançar, vou pegar do topo (mais recentes).
-            // O ideal seria que a Secao usasse uma Fila (Queue) para o despacho FIFO.
-            pacotes_selecionados.push_back(pacotes.pop());
-            // Atualiza estado do pacote para alocado para transporte
-            pacotes_selecionados.back()->atualizarEstado(EstadoPacote::ALOCADO_TRANSPORTE, timestamp, armazemDestino, "Pacote selecionado para transporte.");
+        // Determina quantos pacotes podem ser realmente selecionados (min entre quantidade pedida e pacotes disponíveis)
+        size_t num_a_selecionar = std::min((size_t)quantidade, pacotes.tamanho());
+        if (num_a_selecionar == 0) {
+            return pacotes_selecionados;
         }
+
+        // Para pegar os 'num_a_selecionar' pacotes MAIS ANTIGOS de uma Pilha (LIFO),
+        // eles estão nas posições mais profundas (próximas da base).
+        // A posição do pacote mais antigo da pilha é (tamanho - 1).
+        // Se queremos 'N' pacotes mais antigos, o pacote mais "raso" deles estará
+        // na posição (tamanho - N).
+        // Precisamos remover do topo até a posição do pacote mais "raso" dos que serão selecionados.
+
+        // Posição do pacote mais "raso" entre os 'num_a_selecionar' mais antigos.
+        // Se a pilha tem 5 elementos (0 a 4) e queremos 3 (posições 2, 3, 4 - os mais antigos).
+        // A posição do mais raso é 2. (tamanho - num_a_selecionar) = 5 - 3 = 2.
+        size_t posicao_do_pacote_mais_raso_a_selecionar = pacotes.tamanho() - num_a_selecionar;
+
+        // Remover todos os pacotes do topo até (e incluindo) o pacote na
+        // `posicao_do_pacote_mais_raso_a_selecionar`.
+        // A função `removerAteElemento` desempilha a partir do topo até o elemento desejado.
+        // O vetor `removidos_temporariamente` conterá os pacotes do topo (mais recente)
+        // até o pacote na `posicao_do_pacote_mais_raso_a_selecionar` (mais antigo).
+        // Ex: Pilha [P5, P4, P3, P2, P1]. Se `num_a_selecionar` = 3, `posicao` = 2 (P3).
+        // `removerAteElemento(2)` retorna [P5, P4, P3]. A pilha fica vazia.
+        std::vector<std::shared_ptr<Pacote>> removidos_temporariamente =
+            pacotes.removerAteElemento(posicao_do_pacote_mais_raso_a_selecionar);
+
+        // O vetor `removidos_temporariamente` agora está na ordem do mais recente para o mais antigo.
+        // Os 'num_a_selecionar' pacotes mais antigos estão no *final* deste vetor.
+        // Precisamos extraí-los do final e adicioná-los a `pacotes_selecionados`.
+
+        // Selecionar os 'num_a_selecionar' pacotes do final (os mais antigos)
+        for (size_t i = 0; i < num_a_selecionar; ++i) {
+            // Pega o último elemento (que é o mais antigo entre os removidos e ainda não selecionados)
+            std::shared_ptr<Pacote> pacote_selecionado = removidos_temporariamente.back();
+            removidos_temporariamente.pop_back(); // Remove-o do vetor temporário
+
+            pacotes_selecionados.push_back(pacote_selecionado);
+
+            // Atualiza estado do pacote para alocado para transporte
+            pacote_selecionado->atualizarEstado(EstadoPacote::ALOCADO_TRANSPORTE, timestamp, armazemDestino, "Pacote selecionado para transporte.");
+        }
+
+        // Os pacotes restantes em `removidos_temporariamente` (se houver) foram desempilhados,
+        // mas não foram selecionados para transporte. Eles precisam ser recolocados na pilha.
+        // Eles estão na ordem do mais recente (topo) para o mais antigo (base).
+        // Para recolocar na pilha, `recolocarElementos` espera que o vetor esteja na ordem
+        // do mais antigo para o mais recente (base para topo da pilha).
+        // Então, é necessário inverter a ordem dos elementos restantes antes de recolocá-los.
+        std::reverse(removidos_temporariamente.begin(), removidos_temporariamente.end());
+        pacotes.recolocarElementos(removidos_temporariamente);
+
         return pacotes_selecionados;
     }
 
@@ -105,17 +119,17 @@ namespace LogisticSystem {
         if (vazia()) {
             return nullptr;
         }
-        // Em uma pilha LIFO, o pacote mais antigo é o que está na base.
-        // Isso exigiria iterar até o final da lista ligada.
-        // A Pilha expõe um iterador, mas não um método direto para o "último" ou "mais antigo".
-        // Para simplificar, vou retornar o topo (mais recente).
-        // Isso é uma inconsistência se "mais antigo" é o objetivo.
-        return pacotes.topo(); // Retorna o mais recente, não o mais antigo
+        // Em uma pilha LIFO, o pacote mais antigo é o que está na base (última posição).
+        // A Pilha::obterElemento(posicao) acessa o elemento sem removê-lo.
+        return pacotes.obterElemento(pacotes.tamanho() - 1); // Retorna o pacote na base da pilha (o mais antigo)
     }
 
     void Secao::atualizarEstatisticas(Timestamp_t timestampAtual) {
         // Atualiza a taxa de ocupação média
         double ocupacao_atual = static_cast<double>(pacotes.tamanho());
+        // A lógica para `taxaOcupacaoMedia` parece ser uma média ponderada sobre
+        // `totalPacotesProcessados`. Se `totalPacotesProcessados` é o número de pacotes
+        // que já passaram pela seção, essa média está correta.
         estatisticas.taxaOcupacaoMedia =
             (estatisticas.taxaOcupacaoMedia * estatisticas.totalPacotesProcessados + ocupacao_atual) / (estatisticas.totalPacotesProcessados + 1);
         estatisticas.capacidadeMaximaUtilizada = std::max(estatisticas.capacidadeMaximaUtilizada, (int)ocupacao_atual);
