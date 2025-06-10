@@ -1,118 +1,211 @@
 #include "core/GerenciadorEstatisticas.hpp"
 #include <iostream>
-#include <iomanip> // Para std::fixed, std::setprecision
+#include <iomanip>   // Para std::setw, std::setfill, std::fixed, std::setprecision
+#include <algorithm> // Para std::sort
+#include <sstream>   // Para std::ostringstream
 
 namespace LogisticSystem {
 
-    GerenciadorEstatisticas::GerenciadorEstatisticas(std::shared_ptr<Escalonador> esc,
-                                                     std::shared_ptr<RedeArmazens> rede,
-                                                     std::shared_ptr<SistemaTransporte> sist,
-                                                     const std::vector<std::shared_ptr<Pacote>>& pacotes)
-        : escalonador(esc), redeArmazens(rede), sistemaTransporte(sist), todosPacotes(pacotes) {}
-
-    void GerenciadorEstatisticas::coletarEstatisticas() {
-        // Coletar estatísticas do escalonador
-        if (escalonador) {
-            relatorioFinal.estatisticasEscalonador = escalonador->obterEstatisticas();
-            relatorioFinal.tempoSimulacaoFinal = escalonador->obterTempoAtual();
+    // Hash para std::pair<ID_t, ID_t> necessário para unordered_map de estatisticasRotas
+    struct PairHash {
+        template <class T1, class T2>
+        std::size_t operator () (const std::pair<T1, T2> &p) const {
+            auto h1 = std::hash<T1>{}(p.first);
+            auto h2 = std::hash<T2>{}(p.second);
+            // Combina os hashes (pode ser ajustado para melhor distribuição)
+            return h1 ^ (h2 << 1);
         }
+    };
 
-        // Coletar estatísticas dos armazéns
-        if (redeArmazens) {
-            auto armazens = redeArmazens->obterTodosArmazens();
-            for (const auto& armazem_pair : armazens) {
-                relatorioFinal.estatisticasArmazens[armazem_pair.first] = armazem_pair.second->obterEstatisticasSecoes();
-            }
-        }
+    GerenciadorEstatisticas::GerenciadorEstatisticas(
+        std::shared_ptr<Escalonador> escalonador,
+        std::shared_ptr<RedeArmazens> redeArmazens,
+        std::shared_ptr<SistemaTransporte> sistemaTransporte,
+        const std::vector<std::shared_ptr<Pacote>>& pacotes)
+        : escalonador(escalonador), redeArmazens(redeArmazens), sistemaTransporte(sistemaTransporte),
+          todosPacotes(pacotes) { // Copia a lista de shared_ptr de pacotes
+        // Os mapas de estatísticas são inicializados por padrão
+    }
 
-        // Coletar estatísticas do sistema de transporte
-        if (sistemaTransporte) {
-            relatorioFinal.estatisticasRotas = sistemaTransporte->obterEstatisticasTodasRotas();
-            relatorioFinal.eficienciaGeralTransporte = sistemaTransporte->calcularEficienciaGeral();
-        }
+    void GerenciadorEstatisticas::inicializar(
+        std::shared_ptr<Escalonador> escalonador_ptr,
+        std::shared_ptr<RedeArmazens> redeArmazens_ptr,
+        std::shared_ptr<SistemaTransporte> sistemaTransporte_ptr,
+        const std::vector<std::shared_ptr<Pacote>>& pacotes_list) {
+        
+        escalonador = escalonador_ptr;
+        redeArmazens = redeArmazens_ptr;
+        sistemaTransporte = sistemaTransporte_ptr;
+        todosPacotes = pacotes_list; // Garante que a lista de pacotes está atualizada
+        
+        // Limpar estatísticas anteriores se houver (para reinicializações)
+        estatisticasEscalonador = EstatisticasEscalonador();
+        estatisticasArmazensSecoes.clear();
+        estatisticasRotas.clear();
+    }
 
-        // Coletar métricas de pacotes entregues
-        relatorioFinal.metricasPacotesCompletos.clear();
-        for (const auto& pacote : todosPacotes) {
-            if (pacote->obterEstadoAtual() == EstadoPacote::ENTREGUE) {
-                relatorioFinal.metricasPacotesCompletos.push_back(pacote->calcularMetricas());
+    void GerenciadorEstatisticas::coletarEstatisticasEscalonador() {
+        estatisticasEscalonador.totalEventosProcessados = escalonador->obterTotalEventosProcessados();
+        estatisticasEscalonador.tempoSimulacaoTotal = escalonador->obterTempoAtual();
+        // ... outras estatísticas do escalonador
+    }
+
+    void GerenciadorEstatisticas::coletarEstatisticasArmazens() {
+        // Itera sobre todos os armazéns na rede
+        for (const auto& armazem_pair : redeArmazens->obterTodosArmazens()) {
+            ID_t armazemId = armazem_pair.first;
+            const auto& armazem = armazem_pair.second;
+
+            // Coleta estatísticas de cada seção dentro do armazém
+            std::unordered_map<ID_t, EstatisticasSecao> secoesStats = armazem->obterEstatisticasSecoes();
+            for (const auto& secao_pair : secoesStats) {
+                // Combina o ID do armazém e da seção para a chave do mapa de estatísticas
+                // Se o ID da seção já é único globalmente, pode usar direto secao_pair.first
+                // Se não, você pode usar uma chave composta: std::make_pair(armazemId, secao_pair.first)
+                estatisticasArmazensSecoes[armazemId] = secao_pair.second; // Exemplo: armazenando por ID do armazem
             }
         }
     }
 
-    void GerenciadorEstatisticas::gerarRelatorioTexto(const std::string& arquivoSaida) const {
-        std::ofstream outfile(arquivoSaida);
-        if (!outfile.is_open()) {
-            std::cerr << "Erro: Nao foi possivel criar o arquivo de relatorio: " << arquivoSaida << std::endl;
+    void GerenciadorEstatisticas::coletarEstatisticasSistemaTransporte() {
+        // Coleta estatísticas de cada rota de transporte
+        // O SistemaTransporte deve ter um método para obter suas estatísticas de rota
+        for (const auto& rota_entry : sistemaTransporte->obterEstatisticasTodasRotas()) {
+            estatisticasRotas[rota_entry.first] = rota_entry.second;
+        }
+        // ... outras estatísticas gerais do sistema de transporte (eficiência, etc.)
+    }
+
+    void GerenciadorEstatisticas::coletarEstatisticasPacotes() {
+        // As estatísticas internas dos pacotes (tempo armazenado, em trânsito)
+        // são atualizadas diretamente pelos métodos do Pacote (`Pacote::atualizarEstado`)
+        // ao longo da simulação.
+        // Aqui, iteramos para garantir que todos os pacotes chamaram `calcularMetricas`
+        // se essa função finaliza algum cálculo.
+        for (const auto& pacote : todosPacotes) {
+            pacote->calcularMetricas(); // Garante que as métricas finais estão atualizadas
+        }
+    }
+
+    void GerenciadorEstatisticas::coletarEstatisticas() {
+        coletarEstatisticasEscalonador();
+        coletarEstatisticasArmazens();
+        coletarEstatisticasSistemaTransporte();
+        coletarEstatisticasPacotes(); // Garante que métricas do pacote estão finalizadas
+    }
+
+    // Função auxiliar para formatar IDs e tempos com zeros à esquerda
+    std::string formatID(ID_t id, int width) {
+        std::ostringstream oss;
+        oss << std::setw(width) << std::setfill('0') << id;
+        return oss.str();
+    }
+
+    // Gera o relatório de texto com a sequência de eventos de cada pacote
+    void GerenciadorEstatisticas::gerarRelatorioTexto(const std::string& nomeArquivoSaida) const {
+        std::ofstream arquivoSaida(nomeArquivoSaida);
+        if (!arquivoSaida.is_open()) {
+            std::cerr << "Erro: Nao foi possivel abrir o arquivo de saida: " << nomeArquivoSaida << std::endl;
             return;
         }
 
-        outfile << "--- Relatorio da Simulacao Logistica ---\n";
-        outfile << "Tempo de Simulacao Final: " << std::fixed << std::setprecision(2) << relatorioFinal.tempoSimulacaoFinal << " unidades de tempo\n\n";
+        // Estrutura temporária para coletar e ordenar todos os eventos de todos os pacotes
+        struct EventoParaImpressao {
+            Timestamp_t timestamp;
+            ID_t pacoteId;
+            EstadoPacote estado;
+            ID_t armazemId; // Onde o evento ocorreu (origem para trânsito)
+            std::string observacoes;
+            ID_t armazemOrigemTrans; // Para eventos de transito
+            ID_t armazemDestinoTrans; // Para eventos de transito
+        };
 
-        // Estatísticas do Escalonador
-        outfile << "--- Estatisticas do Escalonador ---\n";
-        outfile << "Eventos Processados: " << relatorioFinal.estatisticasEscalonador.eventosProcessados << "\n";
-        outfile << "Eventos de Chegada: " << relatorioFinal.estatisticasEscalonador.eventosChegada << "\n";
-        outfile << "Eventos de Transporte: " << relatorioFinal.estatisticasEscalonador.eventosTransporte << "\n";
-        outfile << "Eventos Descartados: " << relatorioFinal.estatisticasEscalonador.eventosDescartados << "\n";
-        outfile << "Tempo Medio de Processamento de Evento: " << std::fixed << std::setprecision(4) << relatorioFinal.estatisticasEscalonador.tempoMedioProcessamento << "s\n\n";
-
-        // Estatísticas dos Armazéns
-        outfile << "--- Estatisticas dos Armazens ---\n";
-        for (const auto& armazem_entry : relatorioFinal.estatisticasArmazens) {
-            ID_t armazem_id = armazem_entry.first;
-            auto armazem_ptr = redeArmazens->obterArmazem(armazem_id);
-            if (!armazem_ptr) continue;
-            outfile << "Armazem ID: " << armazem_id << " (" << armazem_ptr->obterNome() << ")\n";
-            for (const auto& secao_entry : armazem_entry.second) {
-                ID_t destino_secao_id = secao_entry.first;
-                const EstatisticasSecao& stats = secao_entry.second;
-                outfile << "  Secao para Destino " << destino_secao_id << ":\n";
-                outfile << "    Total Pacotes Processados: " << stats.totalPacotesProcessados << "\n";
-                outfile << "    Tempo Medio de Permanencia (Estimado): " << std::fixed << std::setprecision(2) << stats.tempoMedioPermanencia << "\n";
-                outfile << "    Taxa de Ocupacao Media: " << std::fixed << std::setprecision(2) << (stats.taxaOcupacaoMedia * 100.0) << "%\n";
-                outfile << "    Capacidade Maxima Utilizada: " << stats.capacidadeMaximaUtilizada << "\n";
+        std::vector<EventoParaImpressao> eventosOrdenados;
+        for (const auto& pacote_ptr : todosPacotes) {
+            ID_t pacote_id = pacote_ptr->obterIdUnico();
+            for (const auto& historico_entry : pacote_ptr->obterHistorico()) {
+                eventosOrdenados.push_back({
+                    historico_entry.timestamp,
+                    pacote_id, // Adiciona o ID do pacote
+                    historico_entry.estado,
+                    historico_entry.armazemId,
+                    historico_entry.observacoes,
+                    historico_entry.armazemOrigemTransporte,
+                    historico_entry.armazemDestinoTransporte
+                });
             }
-            outfile << "\n";
         }
 
-        // Estatísticas das Rotas de Transporte
-        outfile << "--- Estatisticas do Sistema de Transporte ---\n";
-        outfile << "Eficiencia Geral do Transporte: " << std::fixed << std::setprecision(2) << (relatorioFinal.eficienciaGeralTransporte * 100.0) << "%\n";
-        for (const auto& rota_entry : relatorioFinal.estatisticasRotas) {
-            const std::string& chave_rota = rota_entry.first;
-            const EstatisticasRota& stats = rota_entry.second;
-            outfile << "  Rota " << chave_rota << ":\n";
-            outfile << "    Viagens Realizadas: " << stats.viagensRealizadas << "\n";
-            outfile << "    Total Pacotes Transportados: " << stats.totalPacotesTransportados << "\n";
-            outfile << "    Taxa de Utilizacao Media: " << std::fixed << std::setprecision(2) << (stats.taxaUtilizacaoMedia * 100.0) << "%\n";
-            outfile << "    Capacidade Media Utilizada: " << stats.capacidadeMediaUtilizada << "\n";
-            outfile << "    Tempo Medio de Viagem: " << std::fixed << std::setprecision(2) << stats.tempoMedioViagem << "\n";
-        }
-        outfile << "\n";
+        // Ordenar todos os eventos por timestamp.
+        // Em caso de timestamps iguais, ordenar por ID do pacote para consistência,
+        // e depois pelo valor do enum do estado.
+        std::sort(eventosOrdenados.begin(), eventosOrdenados.end(), [](const EventoParaImpressao& a, const EventoParaImpressao& b) {
+            if (a.timestamp != b.timestamp) {
+                return a.timestamp < b.timestamp;
+            }
+            if (a.pacoteId != b.pacoteId) {
+                return a.pacoteId < b.pacoteId;
+            }
+            // Última ordem: pelo valor do enum do estado
+            return static_cast<int>(a.estado) < static_cast<int>(b.estado);
+        });
 
-        // Métricas de Pacotes Entregues
-        outfile << "--- Metricas dos Pacotes Entregues (" << relatorioFinal.metricasPacotesCompletos.size() << ")\n";
-        for (const auto& metricas : relatorioFinal.metricasPacotesCompletos) {
-            outfile << "  - Tempo Esperado: " << std::fixed << std::setprecision(2) << metricas.tempoEsperado
-                    << ", Tempo Armazenado: " << metricas.tempoArmazenado
-                    << ", Tempo Transito: " << metricas.tempoTransito
-                    << ", Atraso Total: " << metricas.atrasoTotal
-                    << ", Transferencias: " << metricas.numeroTransferencias
-                    << ", Gargalo Detectado: " << (metricas.gargaloDetectado ? "Sim" : "Nao") << "\n";
-        }
-        outfile << "\n";
+        // Iterar sobre os eventos ordenados e gerar a saída formatada
+        for (const auto& evento_imp : eventosOrdenados) {
+            // Formatar timestamp e IDs com zeros à esquerda
+            // O tempo pode ser float/double, então converter para long long para preenchimento de zeros
+            std::string tempoStr = formatID(static_cast<ID_t>(std::round(evento_imp.timestamp)), 7); // Arredonda para inteiro para formatação de tempo
+            std::string pacoteIdStr = formatID(evento_imp.pacoteId, 3);
+            
+            arquivoSaida << tempoStr << " pacote " << pacoteIdStr;
 
-        outfile << "--- Fim do Relatorio ---\n";
-        outfile.close();
-        std::cout << "Relatorio gerado com sucesso em: " << arquivoSaida << std::endl;
+            // Gerar a descrição do evento com base no estado e observações
+            switch (evento_imp.estado) {
+                case EstadoPacote::NAO_POSTADO:
+                    // Geralmente não aparece na saída final como no exemplo, mas útil para debug.
+                    // Se for para seguir estritamente o exemplo, este caso pode ser omitido.
+                    arquivoSaida << " " << evento_imp.observacoes; // Ex: "Pacote criado, aguardando postagem."
+                    break;
+                case EstadoPacote::CHEGADA_ESCALONADA:
+                    // Corresponde a um pacote chegando via postagem ou transporte em um armazém.
+                    // No exemplo de saída, esses eventos são geralmente seguidos por "armazenado".
+                    // Se a observação já contém a info completa, use-a. Senão, construa.
+                    arquivoSaida << " chegou escalonada em " << formatID(evento_imp.armazemId, 3);
+                    break;
+                case EstadoPacote::ARMAZENADO:
+                    // Pode ser "armazenado" ou "rearmazenado"
+                    if (evento_imp.observacoes.find("Rearmazenado") != std::string::npos) {
+                        arquivoSaida << " rearmazenado em " << formatID(evento_imp.armazemId, 3) << " na secao " << formatID(evento_imp.armazemId, 3);
+                    } else {
+                        arquivoSaida << " armazenado em " << formatID(evento_imp.armazemId, 3) << " na secao " << formatID(evento_imp.armazemId, 3);
+                    }
+                    break;
+                case EstadoPacote::REMOVIDO_PARA_TRANSPORTE:
+                    // Este estado corresponde ao evento "em transito" na saída.
+                    // Assume que armazemOrigemTrans e armazemDestinoTrans foram preenchidos corretamente.
+                    if (evento_imp.armazemOrigemTrans != -1 && evento_imp.armazemDestinoTrans != -1) {
+                         arquivoSaida << " em transito de " << formatID(evento_imp.armazemOrigemTrans, 3)
+                                      << " para " << formatID(evento_imp.armazemDestinoTrans, 3);
+                    } else {
+                         // Fallback se os IDs de transporte não foram preenchidos (deveriam ser)
+                         arquivoSaida << " removido de " << formatID(evento_imp.armazemId, 3) << " na secao " << formatID(evento_imp.armazemId, 3);
+                    }
+                    break;
+                case EstadoPacote::ENTREGUE:
+                    arquivoSaida << " entregue em " << formatID(evento_imp.armazemId, 3);
+                    break;
+                default:
+                    arquivoSaida << " estado desconhecido (" << static_cast<int>(evento_imp.estado) << ") em " << formatID(evento_imp.armazemId, 3);
+                    break;
+            }
+            arquivoSaida << std::endl;
+        }
+
+        arquivoSaida.close();
+        std::cout << "Relatorio de eventos gerado em: " << nomeArquivoSaida << std::endl;
     }
 
-    void GerenciadorEstatisticas::salvarRelatorioBinario(const std::string& arquivo) const {
-        // Implementação para salvar o relatório em formato binário (serialização)
-        // Isso pode ser complexo e requer uma biblioteca de serialização (ex: Boost.Serialization)
-        // ou implementação manual. Para este protótipo, será deixado vazio.
+    void GerenciadorEstatisticas::salvarRelatorioBinario(const std::string& nomeArquivoSaida) const {
         std::cerr << "Funcionalidade de salvar relatorio binario nao implementada." << std::endl;
     }
 
