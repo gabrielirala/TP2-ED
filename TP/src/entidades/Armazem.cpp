@@ -1,7 +1,7 @@
 #include "entidades/Armazem.hpp"
 #include <algorithm> // Para std::min, std::remove_if, std::reverse
 #include <numeric>   // Para std::accumulate
-#include <vector>    // Incluído explicitamente para std::vector, se já não estivesse
+#include <vector>    // Necessário para std::vector
 
 namespace LogisticSystem {
 
@@ -14,13 +14,18 @@ namespace LogisticSystem {
 
     bool Secao::armazenarPacote(std::shared_ptr<Pacote> pacote, Timestamp_t timestamp) {
         if (pacotes.cheia()) {
+            // Observação: se a seção está cheia e o pacote não pode ser armazenado,
+            // seu estado deveria ser atualizado para algo como CHEGOU_NAO_ARMAZENADO
+            // se esse estado ainda fosse válido ou se houvesse uma lógica de fila de espera.
+            // No novo enunciado, CHEGOU_NAO_ARMAZENADO foi removido.
+            // A responsabilidade de lidar com pacotes não armazenados pode ser do Simulador.
             return false;
         }
         try {
             pacotes.push(pacote);
-            pacote->atualizarEstado(EstadoPacote::ARMAZENADO, timestamp, armazemDestino); // O ID da seção é o destino
+            // Estado 3: Armazenado na seção associada ao próximo destino de um armazém
+            pacote->atualizarEstado(EstadoPacote::ARMAZENADO, timestamp, armazemDestino, "Pacote armazenado na secao.");
             estatisticas.totalPacotesProcessados++; // Considera processado quando armazenado
-            // A taxa de ocupação e tempo de permanência serão atualizados nas estatísticas do Armazem
             return true;
         } catch (const std::overflow_error& e) {
             // Pilha cheia, já verificado, mas para robustez
@@ -32,17 +37,23 @@ namespace LogisticSystem {
         if (posicao >= pacotes.tamanho()) {
             throw std::out_of_range("Posicao invalida para recuperar pacote na secao.");
         }
-        // Em uma pilha, remover do meio é custoso.
-        // Simulamos o processo de remover os pacotes acima, pegar o desejado
-        // e recolocar os demais.
+        // Simulamos o processo de remover os pacotes acima, pegar o desejado e recolocar os demais.
         std::vector<std::shared_ptr<Pacote>> removidos_temporariamente = pacotes.removerAteElemento(posicao);
         std::shared_ptr<Pacote> pacote_recuperado = removidos_temporariamente.back();
         removidos_temporariamente.pop_back(); // Remove o pacote recuperado da lista temporária
 
-        pacotes.recolocarElementos(removidos_temporariamente); // Recoloca os outros pacotes
+        // Recolocar os outros pacotes que foram desempilhados mas não foram selecionados
+        // É CRUCIAL que esses pacotes tenham seu estado atualizado para "ARMAZENADO" com observação "rearmazenado"
+        // E que sejam recolocados na ordem correta (inverter antes de recolocar)
+        std::reverse(removidos_temporariamente.begin(), removidos_temporariamente.end()); // Inverte para recolocar na ordem LIFO
+        for (const auto& p : removidos_temporariamente) {
+            p->atualizarEstado(EstadoPacote::ARMAZENADO, timestamp, armazemDestino, "Pacote rearmazenado na secao.");
+        }
+        pacotes.recolocarElementos(removidos_temporariamente);
 
         // Atualiza o estado do pacote recuperado
-        pacote_recuperado->atualizarEstado(EstadoPacote::ALOCADO_TRANSPORTE, timestamp, armazemDestino, "Pacote alocado para transporte.");
+        // Estado 4: Removido da seção para transporte
+        pacote_recuperado->atualizarEstado(EstadoPacote::REMOVIDO_PARA_TRANSPORTE, timestamp, armazemDestino, "Pacote removido da secao para transporte.");
 
         return pacote_recuperado;
     }
@@ -55,57 +66,44 @@ namespace LogisticSystem {
             return pacotes_selecionados;
         }
 
-        // Determina quantos pacotes podem ser realmente selecionados (min entre quantidade pedida e pacotes disponíveis)
         size_t num_a_selecionar = std::min((size_t)quantidade, pacotes.tamanho());
         if (num_a_selecionar == 0) {
             return pacotes_selecionados;
         }
 
-        // Para pegar os 'num_a_selecionar' pacotes MAIS ANTIGOS de uma Pilha (LIFO),
-        // eles estão nas posições mais profundas (próximas da base).
-        // A posição do pacote mais antigo da pilha é (tamanho - 1).
-        // Se queremos 'N' pacotes mais antigos, o pacote mais "raso" deles estará
-        // na posição (tamanho - N).
-        // Precisamos remover do topo até a posição do pacote mais "raso" dos que serão selecionados.
-
         // Posição do pacote mais "raso" entre os 'num_a_selecionar' mais antigos.
-        // Se a pilha tem 5 elementos (0 a 4) e queremos 3 (posições 2, 3, 4 - os mais antigos).
-        // A posição do mais raso é 2. (tamanho - num_a_selecionar) = 5 - 3 = 2.
         size_t posicao_do_pacote_mais_raso_a_selecionar = pacotes.tamanho() - num_a_selecionar;
 
         // Remover todos os pacotes do topo até (e incluindo) o pacote na
         // `posicao_do_pacote_mais_raso_a_selecionar`.
-        // A função `removerAteElemento` desempilha a partir do topo até o elemento desejado.
-        // O vetor `removidos_temporariamente` conterá os pacotes do topo (mais recente)
-        // até o pacote na `posicao_do_pacote_mais_raso_a_selecionar` (mais antigo).
-        // Ex: Pilha [P5, P4, P3, P2, P1]. Se `num_a_selecionar` = 3, `posicao` = 2 (P3).
-        // `removerAteElemento(2)` retorna [P5, P4, P3]. A pilha fica vazia.
         std::vector<std::shared_ptr<Pacote>> removidos_temporariamente =
             pacotes.removerAteElemento(posicao_do_pacote_mais_raso_a_selecionar);
 
         // O vetor `removidos_temporariamente` agora está na ordem do mais recente para o mais antigo.
         // Os 'num_a_selecionar' pacotes mais antigos estão no *final* deste vetor.
-        // Precisamos extraí-los do final e adicioná-los a `pacotes_selecionados`.
 
         // Selecionar os 'num_a_selecionar' pacotes do final (os mais antigos)
         for (size_t i = 0; i < num_a_selecionar; ++i) {
-            // Pega o último elemento (que é o mais antigo entre os removidos e ainda não selecionados)
             std::shared_ptr<Pacote> pacote_selecionado = removidos_temporariamente.back();
-            removidos_temporariamente.pop_back(); // Remove-o do vetor temporário
+            removidos_temporariamente.pop_back();
 
             pacotes_selecionados.push_back(pacote_selecionado);
 
-            // Atualiza estado do pacote para alocado para transporte
-            pacote_selecionado->atualizarEstado(EstadoPacote::ALOCADO_TRANSPORTE, timestamp, armazemDestino, "Pacote selecionado para transporte.");
+            // Atualiza estado do pacote para o novo estado de remoção
+            // Estado 4: Removido da seção para transporte
+            pacote_selecionado->atualizarEstado(EstadoPacote::REMOVIDO_PARA_TRANSPORTE, timestamp, armazemDestino, "Pacote removido da secao para transporte.");
         }
 
         // Os pacotes restantes em `removidos_temporariamente` (se houver) foram desempilhados,
         // mas não foram selecionados para transporte. Eles precisam ser recolocados na pilha.
-        // Eles estão na ordem do mais recente (topo) para o mais antigo (base).
-        // Para recolocar na pilha, `recolocarElementos` espera que o vetor esteja na ordem
-        // do mais antigo para o mais recente (base para topo da pilha).
-        // Então, é necessário inverter a ordem dos elementos restantes antes de recolocá-los.
+        // Inverter a ordem para manter a lógica LIFO ao recolocar.
         std::reverse(removidos_temporariamente.begin(), removidos_temporariamente.end());
+        
+        // Atualizar estado para "ARMAZENADO" com observação "rearmazenado" para os pacotes recolocados
+        for (const auto& p : removidos_temporariamente) {
+            p->atualizarEstado(EstadoPacote::ARMAZENADO, timestamp, armazemDestino, "Pacote rearmazenado na secao.");
+        }
+
         pacotes.recolocarElementos(removidos_temporariamente);
 
         return pacotes_selecionados;
@@ -119,28 +117,16 @@ namespace LogisticSystem {
         if (vazia()) {
             return nullptr;
         }
-        // Em uma pilha LIFO, o pacote mais antigo é o que está na base (última posição).
-        // A Pilha::obterElemento(posicao) acessa o elemento sem removê-lo.
-        return pacotes.obterElemento(pacotes.tamanho() - 1); // Retorna o pacote na base da pilha (o mais antigo)
+        // O pacote mais antigo está na base da pilha (última posição).
+        return pacotes.obterElemento(pacotes.tamanho() - 1);
     }
 
     void Secao::atualizarEstatisticas(Timestamp_t timestampAtual) {
-        // Atualiza a taxa de ocupação média
         double ocupacao_atual = static_cast<double>(pacotes.tamanho());
-        // A lógica para `taxaOcupacaoMedia` parece ser uma média ponderada sobre
-        // `totalPacotesProcessados`. Se `totalPacotesProcessados` é o número de pacotes
-        // que já passaram pela seção, essa média está correta.
         estatisticas.taxaOcupacaoMedia =
             (estatisticas.taxaOcupacaoMedia * estatisticas.totalPacotesProcessados + ocupacao_atual) / (estatisticas.totalPacotesProcessados + 1);
         estatisticas.capacidadeMaximaUtilizada = std::max(estatisticas.capacidadeMaximaUtilizada, (int)ocupacao_atual);
-
-        // O tempo médio de permanência e tempo máximo de manipulação
-        // são mais complexos de calcular sem um registro detalhado de entrada/saída de cada pacote.
-        // Eles seriam idealmente calculados no momento em que um pacote é removido.
-        // Por agora, podem permanecer com 0.0 ou ser calculados de forma simplificada
-        // apenas para pacotes que foram completamente processados (entrada e saída).
     }
-
 
     // Implementação da classe Armazem
     Armazem::Armazem(ID_t identificador, const std::string& nomeArmazem,
@@ -151,7 +137,6 @@ namespace LogisticSystem {
     void Armazem::adicionarSecao(ID_t armazemDestino, Capacity_t capacidadeSecao,
                                Distance_t tempoManipulacao) {
         if (secoes.count(armazemDestino)) {
-            // Secao já existe, pode ser um erro ou uma atualização de capacidade
             return;
         }
         secoes[armazemDestino] = std::make_unique<Secao>(armazemDestino, capacidadeSecao, tempoManipulacao);
@@ -164,12 +149,11 @@ namespace LogisticSystem {
     bool Armazem::receberPacote(std::shared_ptr<Pacote> pacote, Timestamp_t timestamp) {
         ID_t proximo_armazem_na_rota = pacote->obterProximoArmazem();
 
-        // Se o pacote chegou ao destino final do armazém
+        // Se o pacote chegou ao destino final do armazém atual (ou seja, o armazém atual é o destino final)
         if (pacote->chegouDestino() && pacote->obterArmazemDestino() == id) {
+            // Estado 5: Entregue
             pacote->atualizarEstado(EstadoPacote::ENTREGUE, timestamp, id, "Pacote entregue ao destino final.");
-            // Não armazenamos pacotes entregues em seções.
-            // Precisamos decrementar pacotesAtivos.
-            pacotesAtivos--;
+            pacotesAtivos--; // Decrementa pois o pacote não está mais no sistema (se ele foi contado como ativo)
             notificarObservadores(pacote); // Notificar sobre pacote entregue
             return true;
         }
@@ -184,9 +168,9 @@ namespace LogisticSystem {
             }
         }
         // Se não encontrou seção ou seção cheia para o destino específico
-        // Tentar armazenar em uma seção genérica ou tratar como erro.
-        // Para este protótipo, se não há seção específica, falha.
-        pacote->atualizarEstado(EstadoPacote::CHEGOU_NAO_ARMAZENADO, timestamp, id, "Chegou mas nao pode ser armazenado.");
+        // O enunciado v1.1 não tem mais o estado CHEGOU_NAO_ARMAZENADO,
+        // então pacotes não armazenados devem ser tratados como uma falha ou outra lógica.
+        // Por enquanto, apenas retorna false.
         return false;
     }
 
@@ -197,6 +181,10 @@ namespace LogisticSystem {
             pacotes_para_transporte = secoes[armazemDestino]->selecionarPacotesMaisAntigos(
                 capacidadeTransporte, timestamp);
             // Atualizar contagem de pacotes ativos (eles foram removidos do armazém para o transporte)
+            // Pacotes selecionados para transporte não estão mais na pilha, mas ainda são 'ativos' no sistema.
+            // A contagem `pacotesAtivos` aqui pode precisar de revisão dependendo de como
+            // `pacotesAtivos` é definido (no armazém vs. no sistema de transporte).
+            // Por simplicidade, assumimos que eles saíram do armazém, então removemos da contagem local.
             pacotesAtivos -= pacotes_para_transporte.size();
         }
         return pacotes_para_transporte;
@@ -246,10 +234,7 @@ namespace LogisticSystem {
     }
 
     void Armazem::atualizarEstatisticas(Timestamp_t timestampAtual) {
-        // Atualiza o histórico de ocupação
         historicoOcupacao.push_back({timestampAtual, obterTaxaOcupacao()});
-
-        // Atualiza estatísticas de cada seção
         for (auto& pair : secoes) {
             pair.second->atualizarEstatisticas(timestampAtual);
         }
@@ -277,9 +262,11 @@ namespace LogisticSystem {
         Distance_t total_tempo_manipulacao = 0.0;
         int total_secoes_com_dados = 0;
         for (const auto& pair : secoes) {
-            // Simplificado: usa o tempo unitário da seção, sem considerar a profundidade
             if (pair.second->obterOcupacao() > 0) {
-                 total_tempo_manipulacao += pair.second->calcularTempoManipulacao(0); // Usando a posição 0 para o cálculo base
+                 // Usando a posição 0 para o cálculo base para simular o tempo de manipulação do topo
+                 // ou da posição mais "rasa" que seria removida rapidamente.
+                 // Se o `custoRemocaoGlobal` é o custo por pacote, então esta soma está correta.
+                 total_tempo_manipulacao += pair.second->calcularTempoManipulacao(0); 
                  total_secoes_com_dados++;
             }
         }

@@ -1,108 +1,68 @@
+// Esta é uma representação do que Pacote.hpp DEVE ter,
+// especialmente a assinatura de atualizarEstado.
+
 #ifndef PACOTE_HPP
 #define PACOTE_HPP
 
-#include "utils/Tipos.hpp"
-#include "interfaces/IObservador.hpp"
 #include <string>
 #include <vector>
-#include <memory>
+#include "utils/Tipos.hpp" // Inclui os enums e structs
 
 namespace LogisticSystem {
-    struct HistoricoEstado {
-        EstadoPacote estado;
-        Timestamp_t timestamp;
-        ID_t armazemId;
-        std::string observacoes;
-        
-        HistoricoEstado(EstadoPacote e, Timestamp_t t, ID_t id, const std::string& obs = "")
-            : estado(e), timestamp(t), armazemId(id), observacoes(obs) {}
-    };
-    
-    class Pacote : public IObservavel<HistoricoEstado> {
+
+    class Pacote {
     private:
         ID_t idUnico;
+        ID_t armazemOrigemInicial;
+        ID_t armazemDestinoFinal;
         Timestamp_t dataPostagem;
-        std::string remetente;
-        std::string destinatario;
-        std::string tipo;
-        ID_t armazemOrigem;
-        ID_t armazemDestino;
-        
-        // Roteamento
-        std::vector<ID_t> rota;
-        size_t posicaoAtualRota;
-        
-        // Estado e histórico
+
         EstadoPacote estadoAtual;
-        std::vector<HistoricoEstado> historico;
-        
-        // Estatísticas
+        Timestamp_t tempoUltimaAtualizacao;
+        std::vector<HistoricoEstado> historico; // Histórico de estados do pacote
+
+        // Rota calculada para o pacote
+        // A sua ListaLigada de IDs de armazéns
+        ListaLigada<ID_t> rotaArmazens;
+        size_t posicaoAtualRota; // Índice atual na rota
+
+        // Estatísticas internas do pacote
         Timestamp_t tempoTotalArmazenado;
         Timestamp_t tempoTotalTransito;
-        Timestamp_t timestampUltimaMudanca;
-        Timestamp_t tempoEsperadoTotal;
-        
-        void atualizarEstatisticasInternas(Timestamp_t novoTimestamp);
-        
-    public:
-        Pacote(ID_t id, Timestamp_t postagem, const std::string& rem, 
-               const std::string& dest, const std::string& tipoPacote,
-               ID_t origem, ID_t destino);
-        
-        // Getters
-        ID_t obterIdUnico() const { return idUnico; }
-        Timestamp_t obterDataPostagem() const { return dataPostagem; }
-        const std::string& obterRemetente() const { return remetente; }
-        const std::string& obterDestinatario() const { return destinatario; }
-        const std::string& obterTipo() const { return tipo; }
-        ID_t obterArmazemOrigem() const { return armazemOrigem; }
-        ID_t obterArmazemDestino() const { return armazemDestino; }
-        
-        EstadoPacote obterEstadoAtual() const { return estadoAtual; }
-        const std::vector<ID_t>& obterRota() const { return rota; }
-        size_t obterPosicaoAtualRota() const { return posicaoAtualRota; }
-        
-        // Roteamento
-        void definirRota(const std::vector<ID_t>& novaRota);
-        ID_t obterProximoArmazem() const;
-        bool chegouDestino() const;
-        void avancarNaRota();
-        
-        // Gerenciamento de estado
-        void atualizarEstado(EstadoPacote novoEstado, Timestamp_t timestamp, 
-                           ID_t armazemId, const std::string& observacoes = "");
-        
-        // Estatísticas
-        MetricasPacote calcularMetricas() const;
-        Timestamp_t obterTempoTotalArmazenado() const { return tempoTotalArmazenado; }
-        Timestamp_t obterTempoTotalTransito() const { return tempoTotalTransito; }
-        Timestamp_t obterTempoEsperadoTotal() const { return tempoEsperadoTotal; }
-        
-        void definirTempoEsperado(Timestamp_t tempo) { tempoEsperadoTotal = tempo; }
-        
-        // Histórico
-        const std::vector<HistoricoEstado>& obterHistorico() const { return historico; }
-        Timestamp_t obterTimestampUltimaMudanca() const { return timestampUltimaMudanca; }
-        
-        // Comparadores para ordenação
-        struct ComparadorPorTempoArmazenado {
-            bool operator()(const std::shared_ptr<Pacote>& a, 
-                          const std::shared_ptr<Pacote>& b) const {
-                return a->obterTimestampUltimaMudanca() < b->obterTimestampUltimaMudanca();
-            }
-        };
-        
-        struct ComparadorPorPrioridade {
-            bool operator()(const std::shared_ptr<Pacote>& a, 
-                          const std::shared_ptr<Pacote>& b) const {
-                // Prioridade: tempo de armazenamento > urgência do tipo
-                if (a->obterTempoTotalArmazenado() != b->obterTempoTotalArmazenado()) {
-                    return a->obterTempoTotalArmazenado() > b->obterTempoTotalArmazenado();
-                }
-                return a->obterTipo() < b->obterTipo(); // Critério de desempate
-            }
-        };
-    };
-}
+        // ... outras estatísticas que você pode ter
 
-#endif
+    public:
+        // Construtor do pacote ajustado para o novo formato de entrada
+        Pacote(ID_t id, Timestamp_t dataPostagem, ID_t origem, ID_t destino);
+
+        // Métodos para atualizar o estado do pacote e registrar no histórico
+        // Adiciona um parâmetro para observações detalhadas
+        void atualizarEstado(EstadoPacote novoEstado, Timestamp_t timestamp, ID_t armazemId, const std::string& observacoes = "");
+
+        // Métodos de acesso
+        ID_t obterIdUnico() const;
+        ID_t obterArmazemOrigem() const;
+        ID_t obterArmazemDestino() const; // Destino final
+        Timestamp_t obterDataPostagem() const;
+        EstadoPacote obterEstadoAtual() const;
+        Timestamp_t obterTempoUltimaAtualizacao() const;
+        const std::string& obterObservacoesUltimaAtualizacao() const;
+        const std::vector<HistoricoEstado>& obterHistorico() const;
+
+        // Métodos relacionados à rota
+        void definirRota(const ListaLigada<ID_t>& rota);
+        ID_t obterProximoArmazem() const; // Próximo armazém na rota
+        bool avancarNaRota(); // Move para o próximo armazém na rota, retorna true se não é o último
+        bool chegouDestino() const; // Verifica se o pacote chegou ao destino final
+
+        // Métodos de cálculo de métricas (se ainda relevantes para relatórios internos)
+        void calcularMetricas(); // Pode recalcular tempo armazenado e transito, etc.
+
+    private:
+        // Função auxiliar para atualizar estatísticas internas baseada na transição de estado
+        void atualizarEstatisticasInternas(Timestamp_t timestamp);
+    };
+
+} // namespace LogisticSystem
+
+#endif // PACOTE_HPP

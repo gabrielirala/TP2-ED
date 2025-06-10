@@ -1,128 +1,92 @@
 #include "entidades/Pacote.hpp"
-#include <stdexcept> // Para std::out_of_range
-#include <sstream>   // Para obterDetalhes
+#include <iostream> // Para debug ou mensagens de erro
 
 namespace LogisticSystem {
 
-    Pacote::Pacote(ID_t id, Timestamp_t postagem, const std::string& rem,
-                   const std::string& dest, const std::string& tipoPacote,
-                   ID_t origem, ID_t destino)
-        : idUnico(id), dataPostagem(postagem), remetente(rem),
-          destinatario(dest), tipo(tipoPacote),
-          armazemOrigem(origem), armazemDestino(destino),
-          posicaoAtualRota(0), estadoAtual(EstadoPacote::NAO_POSTADO),
-          tempoTotalArmazenado(0.0), tempoTotalTransito(0.0),
-          timestampUltimaMudanca(postagem), tempoEsperadoTotal(0.0) {
-        // O estado inicial é "NAO_POSTADO" e será atualizado para "CHEGADA_ESCALONADA"
-        // ou "ARMAZENADO" pelo simulador ao agendar o evento de chegada inicial.
-        historico.emplace_back(EstadoPacote::NAO_POSTADO, postagem, 0, "Pacote criado no sistema.");
+    // Construtor do pacote ajustado para o novo formato de entrada (sem remetente/destinatario/tipo)
+    Pacote::Pacote(ID_t id, Timestamp_t dataPostagem, ID_t origem, ID_t destino)
+        : idUnico(id), armazemOrigemInicial(origem), armazemDestinoFinal(destino),
+          dataPostagem(dataPostagem), estadoAtual(EstadoPacote::NAO_POSTADO),
+          tempoUltimaAtualizacao(dataPostagem), posicaoAtualRota(0),
+          tempoTotalArmazenado(0.0), tempoTotalTransito(0.0) {
+        // O primeiro registro no histórico é a postagem (NAO_POSTADO ou CHEGADA_ESCALONADA)
+        historico.push_back({dataPostagem, EstadoPacote::NAO_POSTADO, origem, "Pacote criado, aguardando postagem."});
     }
 
-    void Pacote::definirRota(const std::vector<ID_t>& novaRota) {
-        if (novaRota.empty()) {
-            throw std::invalid_argument("A rota nao pode ser vazia.");
+    // Método para atualizar o estado do pacote e registrar no histórico
+    void Pacote::atualizarEstado(EstadoPacote novoEstado, Timestamp_t timestamp, ID_t armazemId, const std::string& observacoes) {
+        // Calcula o tempo que o pacote passou no estado anterior
+        if (estadoAtual == EstadoPacote::ARMAZENADO) {
+            tempoTotalArmazenado += (timestamp - tempoUltimaAtualizacao);
+        } else if (estadoAtual == EstadoPacote::REMOVIDO_PARA_TRANSPORTE) { // Pacote em trânsito
+            tempoTotalTransito += (timestamp - tempoUltimaAtualizacao);
         }
-        if (novaRota.front() != armazemOrigem || novaRota.back() != armazemDestino) {
-            // Isso pode ser uma validação mais flexível dependendo da lógica do simulador.
-            // Para rotas intermediárias, a origem e destino do pacote podem não corresponder
-            // ao início e fim da rota atual.
-            // Aqui, estamos assumindo que esta é a rota COMPLETA do pacote.
-            // Se for uma sub-rota, a validação deve ser diferente.
-            // throw std::invalid_argument("Rota invalida: O inicio ou fim da rota nao corresponde a origem/destino do pacote.");
-        }
-        rota = novaRota;
-        posicaoAtualRota = 0;
-        // Tempo esperado pode ser calculado com base na rota e tempos de transporte
-        // mas isso provavelmente será feito pelo Simulador/SistemaTransporte.
+        // Nota: A lógica de tempoTotalTransito deve ser mais robusta,
+        // pois pacotes em trânsito não estão em um armazém específico.
+        // A duração do transporte é medida entre o agendamento e a chegada.
+
+        estadoAtual = novoEstado;
+        tempoUltimaAtualizacao = timestamp;
+
+        // Adiciona o novo estado ao histórico
+        historico.push_back({timestamp, novoEstado, armazemId, observacoes});
+
+        // Notificar observadores (se houver, como o Simulador ou GerenciadorEstatisticas)
+        // Isso depende da sua implementação de IObservador e do sistema de notificação.
+        // Ex: notificadores.notify(shared_from_this());
+    }
+
+    // ... (Outros métodos de Pacote: obterIdUnico, obterArmazemOrigem, etc.) ...
+
+    ID_t Pacote::obterIdUnico() const { return idUnico; }
+    ID_t Pacote::obterArmazemOrigem() const { return armazemOrigemInicial; }
+    ID_t Pacote::obterArmazemDestino() const { return armazemDestinoFinal; }
+    Timestamp_t Pacote::obterDataPostagem() const { return dataPostagem; }
+    EstadoPacote Pacote::obterEstadoAtual() const { return estadoAtual; }
+    Timestamp_t Pacote::obterTempoUltimaAtualizacao() const { return tempoUltimaAtualizacao; }
+    const std::string& Pacote::obterObservacoesUltimaAtualizacao() const {
+        if (historico.empty()) return ""; // Ou lance uma exceção
+        return historico.back().observacoes;
+    }
+    const std::vector<HistoricoEstado>& Pacote::obterHistorico() const { return historico; }
+
+    void Pacote::definirRota(const ListaLigada<ID_t>& rota) {
+        this->rotaArmazens = rota;
+        this->posicaoAtualRota = 0;
     }
 
     ID_t Pacote::obterProximoArmazem() const {
-        if (chegouDestino()) {
-            return armazemDestino; // Já chegou ao destino final
+        if (posicaoAtualRota < rotaArmazens.obterTamanho()) {
+            return rotaArmazens.obterElemento(posicaoAtualRota);
         }
-        if (posicaoAtualRota + 1 < rota.size()) {
-            return rota[posicaoAtualRota + 1];
+        return -1; // Sinaliza que não há próximo armazém ou chegou ao destino final
+    }
+
+    bool Pacote::avancarNaRota() {
+        if (posicaoAtualRota < rotaArmazens.obterTamanho() - 1) {
+            posicaoAtualRota++;
+            return true;
         }
-        // Se a posição atual é a última na rota e não é o destino final
-        // ou se a rota está vazia, o comportamento depende da lógica.
-        // Para este protótipo, podemos retornar 0 ou lançar exceção.
-        return 0; // Indicador de erro ou não há próximo armazém
+        return false; // Chegou ao destino final ou rota inválida
     }
 
     bool Pacote::chegouDestino() const {
-        if (rota.empty()) { // Se não há rota, ele só "chega" se a origem for o destino.
-            return armazemOrigem == armazemDestino;
-        }
-        return (posicaoAtualRota >= rota.size() - 1) && (rota.back() == armazemDestino);
+        return posicaoAtualRota == rotaArmazens.obterTamanho() - 1;
     }
 
-    void Pacote::avancarNaRota() {
-        if (!chegouDestino()) {
-            posicaoAtualRota++;
-        }
+    // Se você tiver uma função para recalcular métricas baseadas no histórico completo
+    void Pacote::calcularMetricas() {
+        // Implementar cálculo de tempo de estadia, tempo em trânsito, etc.,
+        // iterando sobre o `historico` do pacote.
+        // Isso é mais robusto do que a atualização incremental em `atualizarEstado`
+        // se houver transições de estado complexas ou dados faltantes.
     }
 
-    void Pacote::atualizarEstado(EstadoPacote novoEstado, Timestamp_t timestamp,
-                               ID_t armazemId, const std::string& observacoes) {
-        if (timestamp < timestampUltimaMudanca) {
-            // Isso pode ser um erro, dependendo da precisão da simulação.
-            // Para simplificar, podemos ignorar ou lançar uma exceção.
-        }
-
-        atualizarEstatisticasInternas(timestamp); // Atualiza métricas baseadas no tempo anterior
-
-        estadoAtual = novoEstado;
-        historico.emplace_back(novoEstado, timestamp, armazemId, observacoes);
-        timestampUltimaMudanca = timestamp;
-
-        // Notificar observadores sobre a mudança de estado
-        notificarObservadores(historico.back());
-    }
-
-    void Pacote::atualizarEstatisticasInternas(Timestamp_t novoTimestamp) {
-        // Calcula o tempo que o pacote passou no estado anterior
-        if (timestampUltimaMudanca > 0 && novoTimestamp > timestampUltimaMudanca) {
-            Timestamp_t tempoDecorrido = novoTimestamp - timestampUltimaMudanca;
-            if (estadoAtual == EstadoPacote::ARMAZENADO || estadoAtual == EstadoPacote::CHEGOU_NAO_ARMAZENADO) {
-                tempoTotalArmazenado += tempoDecorrido;
-            } else if (estadoAtual == EstadoPacote::ALOCADO_TRANSPORTE) {
-                // ALOCADO_TRANSPORTE é o estado *antes* de entrar no transporte.
-                // O tempo em trânsito será contabilizado no EventoTransporte ou EventoChegada
-                // quando o pacote efetivamente se move.
-            } else if (estadoAtual == EstadoPacote::CHEGADA_ESCALONADA) {
-                // Pacote esperando para ser postado/processado na origem.
-                // Pode ser considerado tempo de espera ou tempo de processamento inicial.
-            }
-        }
-    }
-
-    MetricasPacote Pacote::calcularMetricas() const {
-        MetricasPacote metricas;
-        metricas.tempoEsperado = tempoEsperadoTotal; // Valor que deve ser definido externamente
-        metricas.tempoArmazenado = tempoTotalArmazenado;
-        metricas.tempoTransito = tempoTotalTransito; // Pode ser acumulado no evento de transporte
-
-        // Cálculo de atraso total: assumindo que tempoEsperadoTotal é o target.
-        // Atraso só faz sentido se o pacote foi entregue e o tempo de entrega é maior que o esperado.
-        if (estadoAtual == EstadoPacote::ENTREGUE) {
-            Timestamp_t tempoEntregaReal = historico.back().timestamp - dataPostagem;
-            metricas.atrasoTotal = std::max(0.0, tempoEntregaReal - tempoEsperadoTotal);
-        } else {
-            // Se não entregue, o atraso ainda não é final. Pode ser um atraso parcial/acumulado.
-            // Para simplificar, consideramos 0 se não foi entregue.
-            metricas.atrasoTotal = 0.0;
-        }
-
-        metricas.numeroTransferencias = 0;
-        for (size_t i = 0; i < historico.size(); ++i) {
-            if (historico[i].estado == EstadoPacote::ALOCADO_TRANSPORTE && i + 1 < historico.size() &&
-                historico[i+1].estado == EstadoPacote::CHEGADA_ESCALONADA) { // Chegada no próximo armazém
-                metricas.numeroTransferencias++;
-            }
-        }
-        metricas.gargaloDetectado = false; // Deve ser definido por um sistema de monitoramento/análise.
-
-        return metricas;
+    // A função `atualizarEstatisticasInternas` pode ser removida ou incorporada em `atualizarEstado`
+    // visto que a lógica de cálculo de tempo já está em `atualizarEstado` agora.
+    void Pacote::atualizarEstatisticasInternas(Timestamp_t timestamp) {
+        // Esta função pode ser incorporada diretamente em atualizarEstado
+        // ou usada para lógica mais complexa. Por enquanto, a lógica está diretamente em atualizarEstado.
     }
 
 } // namespace LogisticSystem
