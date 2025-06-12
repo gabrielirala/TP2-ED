@@ -4,7 +4,7 @@
 #include "Types.h"
 #include "DataStructures.h"
 
-// Simulation Parameters 
+// Simulation Parameters
 int capacidadeTransporte;
 int latenciaTransporte;
 int intervaloTransportes;
@@ -14,12 +14,13 @@ int** matrizAdjacencia;
 Armazem** armazens;
 Escalonador* escalonador;
 
+// +++ CORREÇÃO: Variáveis para controle de término e tempo inicial +++
 int totalPacotes;
 int pacotesEntregues = 0;
 
 // --- Helper Functions ---
 
-// Calculates the shortest path using Breadth-First Search (BFS) 
+// Calcula a rota usando BFS (sem alterações)
 void calcularRota(Pacote* pacote) {
     int origem = pacote->origem;
     int destino = pacote->destino;
@@ -48,7 +49,6 @@ void calcularRota(Pacote* pacote) {
         }
     }
 
-    // Reconstruct path
     Pilha<int> caminho;
     int atual = destino;
     while (atual != -1) {
@@ -66,7 +66,8 @@ void calcularRota(Pacote* pacote) {
     delete[] visitado;
 }
 
-void lerEntrada() {
+// +++ CORREÇÃO: A função agora retorna o tempo da primeira chegada +++
+long lerEntradaEAgendarChegadas() {
     std::cin >> capacidadeTransporte >> latenciaTransporte >> intervaloTransportes >> custoRemocao;
     std::cin >> numeroArmazens;
 
@@ -85,23 +86,31 @@ void lerEntrada() {
     
     int numPacotes;
     std::cin >> numPacotes;
-    totalPacotes = numPacotes;
+    totalPacotes = numPacotes; // Armazena o total
     
-    // Maximum possible events: arrivals + initial transports
-    escalonador = new Escalonador(numPacotes + numeroArmazens * numeroArmazens);
+    escalonador = new Escalonador(numPacotes + (numeroArmazens * numeroArmazens * 2));
+
+    long minTempoChegada = -1; // Para encontrar o tempo do primeiro pacote
 
     for (int i = 0; i < numPacotes; ++i) {
         long tempo;
-        int id, org, dst;
+        int id_original, org, dst; // O ID original será descartado
         std::string p, o, d;
-        std::cin >> tempo >> p >> id >> o >> org >> d >> dst;
+        std::cin >> tempo >> p >> id_original >> o >> org >> d >> dst;
 
-        Pacote* novoPacote = new Pacote{id, org, dst, tempo, nullptr, 0, 0};
+        // +++ CORREÇÃO: Encontra o menor tempo de chegada +++
+        if (minTempoChegada == -1 || tempo < minTempoChegada) {
+            minTempoChegada = tempo;
+        }
+
+        // +++ CORREÇÃO: Usa o índice 'i' como o novo ID do pacote +++
+        Pacote* novoPacote = new Pacote{i, org, dst, tempo, nullptr, 0, 0};
         calcularRota(novoPacote);
 
         Evento* eventoChegada = new Evento{tempo, PACOTE_CHEGA, novoPacote, org, -1};
         escalonador->agendar(eventoChegada);
     }
+    return minTempoChegada;
 }
 
 // --- Event Processing Functions ---
@@ -112,20 +121,16 @@ void processaChegada(Evento* evento) {
     pacote->tempoPostagem = evento->tempo;
 
     if (armazemAtualId == pacote->destino) {
-        // Package has reached its final destination 
         printf("%07ld pacote %03d entregue em %03d\n",
                evento->tempo, pacote->id, armazemAtualId);
-        pacotesEntregues++;
+        pacotesEntregues++; // Incrementa contador
         delete[] pacote->rota;
         delete pacote;
     } else {
-        // Package arrived at an intermediate warehouse, store it 
         armazens[armazemAtualId]->armazena(pacote);
     }
 }
 
-// This function implements the complex transport logic 
-// It must "dig" for the oldest packages in a LIFO stack.
 void processaTransporte(Evento* evento) {
     int origemId = evento->armazemOrigem;
     int destinoId = evento->armazemDestino;
@@ -134,74 +139,30 @@ void processaTransporte(Evento* evento) {
     Pilha<Pacote*>& secao = armazens[origemId]->getSecao(destinoId);
 
     if (!secao.isEmpty()) {
-        // --- Logic to "dig" for the oldest packages ---
-        
-        // 1. Temporarily move all packages to find their posting order
         Pilha<Pacote*> tempPilha;
         while (!secao.isEmpty()) {
             tempPilha.push(secao.pop());
         }
 
-        // 2. Identify packages to transport (oldest ones)
-        Fila<Pacote*> pacotesParaTransportar;
-        int count = 0;
-        while (!tempPilha.isEmpty() && count < capacidadeTransporte) {
-            pacotesParaTransportar.enqueue(tempPilha.pop());
-            count++;
-        }
-        
-        // Packages left in tempPilha must be re-stored
-        Pilha<Pacote*> pacotesParaRearmazenar;
-        while(!tempPilha.isEmpty()){
-            pacotesParaRearmazenar.push(tempPilha.pop());
-        }
-
-        // 3. Process removals, transports, and re-storages
         long tempoLog = tempoAtual;
-
-        // Simulate removal of packages that were on top (re-stored ones)
-        while(!pacotesParaRearmazenar.isEmpty()){
-            Pacote* p = pacotesParaRearmazenar.pop();
-            tempoLog += custoRemocao;
-            printf("%07ld pacote %03d removido de %03d na secao %03d\n",
-                   tempoLog, p->id, origemId, destinoId);
-        }
-
-        // Simulate removal of packages that will be transported
-        Fila<Pacote*> transportadosFila;
-         while(!pacotesParaTransportar.isEmpty()){
-            Pacote* p = pacotesParaTransportar.dequeue();
-            tempoLog += custoRemocao;
-            printf("%07ld pacote %03d removido de %03d na secao %03d\n",
-                   tempoLog, p->id, origemId, destinoId);
-            transportadosFila.enqueue(p);
-        }
-
-        // 4. Log transport and re-storage events, schedule future arrivals
-        // All these events happen logically at the final calculated time `tempoLog`
         
-        // Re-store packages that were not transported
-        while(!pacotesParaRearmazenar.isEmpty()) {
-            Pacote* p = pacotesParaRearmazenar.pop();
-            secao.push(p);
-             printf("%07ld pacote %03d rearmazenado em %03d na secao %03d\n",
+        while (!tempPilha.isEmpty()) {
+            Pacote* p = tempPilha.pop();
+            tempoLog += custoRemocao;
+            
+            printf("%07ld pacote %03d removido de %03d na secao %03d\n",
                    tempoLog, p->id, origemId, destinoId);
-        }
-
-        // Schedule arrivals for transported packages
-        while(!transportadosFila.isEmpty()) {
-            Pacote* p = transportadosFila.dequeue();
             printf("%07ld pacote %03d em transito de %03d para %03d\n",
                    tempoLog, p->id, origemId, destinoId);
             
             Evento* eventoChegada = new Evento{tempoLog + latenciaTransporte, PACOTE_CHEGA, p, destinoId, -1};
             escalonador->agendar(eventoChegada);
+
+            if (tempPilha.getTamanho() >= capacidadeTransporte) {
+                 secao.push(p);
+            }
         }
     }
-
-    // Schedule the next transport event for this route 
-    //Evento* proximoTransporte = new Evento{tempoAtual + intervaloTransportes, INICIA_TRANSPORTE, nullptr, origemId, destinoId};
-    //escalonador->agendar(proximoTransporte);
 
     if (pacotesEntregues < totalPacotes) {
         Evento* proximoTransporte = new Evento{tempoAtual + intervaloTransportes, INICIA_TRANSPORTE, nullptr, origemId, destinoId};
@@ -209,7 +170,7 @@ void processaTransporte(Evento* evento) {
     }
 }
 
-// Checks if the simulation should end 
+// ... (simulacaoDeveTerminar e cleanup sem alterações) ...
 bool simulacaoDeveTerminar() {
     if (!escalonador->vazio()) {
         return false;
@@ -234,23 +195,24 @@ void cleanup() {
 
 // --- Main Simulation ---
 int main() {
-    // 1. Initialization Phase 
-    lerEntrada();
+    long tempoPrimeiraChegada = lerEntradaEAgendarChegadas();
 
-    // Schedule initial transport events for all connections
-    for (int i = 0; i < numeroArmazens; ++i) {
-        for (int j = 0; j < numeroArmazens; ++j) {
-            if (matrizAdjacencia[i][j] == 1) {
-                Evento* eventoTransporte = new Evento{intervaloTransportes, INICIA_TRANSPORTE, nullptr, i, j};
-                escalonador->agendar(eventoTransporte);
+    if (tempoPrimeiraChegada != -1) {
+        for (int i = 0; i < numeroArmazens; ++i) {
+            for (int j = 0; j < numeroArmazens; ++j) {
+                if (matrizAdjacencia[i][j] == 1) {
+                    // +++ CORREÇÃO: Usa o tempo da primeira chegada para agendar o transporte inicial +++
+                    long tempoPrimeiroTransporte = tempoPrimeiraChegada + intervaloTransportes;
+                    Evento* eventoTransporte = new Evento{tempoPrimeiroTransporte, INICIA_TRANSPORTE, nullptr, i, j};
+                    escalonador->agendar(eventoTransporte);
+                }
             }
         }
     }
 
-    // 2. Simulation Loop 
     while (!simulacaoDeveTerminar()) {
         Evento* eventoAtual = escalonador->proximo();
-        if (eventoAtual == nullptr) continue; // Should not happen if simulacaoDeveTerminar is correct
+        if (eventoAtual == nullptr) continue; 
 
         switch (eventoAtual->tipo) {
             case PACOTE_CHEGA:
@@ -260,11 +222,9 @@ int main() {
                 processaTransporte(eventoAtual);
                 break;
         }
-        delete eventoAtual; // Clean up the processed event
+        delete eventoAtual; 
     }
 
-    // 3. Cleanup
     cleanup();
-
     return 0;
 }
