@@ -221,18 +221,26 @@ void cleanup() {
     }
     if (armazens != nullptr) {
          for (int i = 0; i < numeroArmazens; ++i) {
-            if(armazens[i] != nullptr) delete armazens[i];
+            if(armazens[i] != nullptr) {
+                for (int j = 0; j < numeroArmazens; ++j) {
+                    Pilha<Pacote*>& secao = armazens[i]->getSecao(j);
+                    while (!secao.isEmpty()) {
+                        Pacote* p = secao.pop();
+                        delete[] p->rota; // Deleta a rota do pacote
+                        delete p;         // Deleta o objeto do pacote
+                    }
+                }
+                delete armazens[i]; // Deleta o próprio armazém
+            }
         }
         delete[] armazens;
         armazens = nullptr;
     }
+
     if(escalonador != nullptr) delete escalonador;
     escalonador = nullptr;
 }
 
-
-// --- Simulação Principal ---
-// +++ FUNÇÃO MAIN MODIFICADA para receber argumentos de linha de comando +++
 int main(int argc, char *argv[]) {
     // Verifica se o nome do arquivo foi passado como argumento
     if (argc < 2) {
@@ -247,7 +255,7 @@ int main(int argc, char *argv[]) {
         return 1; // Retorna erro
     }
 
-    // Passa o fluxo do arquivo para a função de leitura
+
     long tempoPrimeiraChegada = lerEntradaEAgendarChegadas(arquivoEntrada);
 
     // Fecha o arquivo após a leitura
