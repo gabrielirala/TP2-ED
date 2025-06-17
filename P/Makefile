@@ -1,40 +1,36 @@
-# Makefile for TP2 - Estruturas de Dados
-
-# Compiler and flags
+# Compilador e flags
 CXX = g++
 CXXFLAGS = -std=c++11 -Wall -Wextra -O2 -Iinclude
 
-# Directories
+# Diretórios
 SRCDIR = src
 OBJDIR = obj
 BINDIR = bin
-INCDIR = include
 
-# Find all source files
+# Encontra todos os arquivos .cpp na pasta src
 SOURCES = $(wildcard $(SRCDIR)/*.cpp)
 
-# Generate object file names from source file names
+# Gera os nomes dos arquivos objeto .o a partir dos fontes .cpp
 OBJECTS = $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(SOURCES))
 
-# Final executable name
 EXECUTABLE = $(BINDIR)/tp2.out
 
-# Default target
+# Alvo padrão: compila tudo
 all: $(EXECUTABLE)
 
-# Rule to link the executable
+# Regra para linkar o executável final a partir dos arquivos objeto
 $(EXECUTABLE): $(OBJECTS)
 	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-# Rule to compile source files into object files
+# Regra para compilar cada arquivo .cpp em um arquivo .o
 $(OBJDIR)/%.o: $(SRCDIR)/%.cpp
 	@mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-# Clean up build files
+# Limpa os arquivos gerados pela compilação
 clean:
 	rm -rf $(OBJDIR) $(BINDIR)
 
-# Phony targets
+# Alvos "falsos" que não correspondem a arquivos
 .PHONY: all clean

@@ -1,31 +1,8 @@
 #include "Types.h"
-#include "DataStructures.h"
+#include "DataStructures.h" // Necessário para as implementações que usam Pilha e FilaDePrioridade
 
-// --- Evento Comparison ---
-// Implements the total ordering logic for the priority queue 
-// Order: Time > Event Type > Other details for tie-breaking
-bool FilaDePrioridade::comparaEventos(Evento* a, Evento* b) {
-    if (a->tempo < b->tempo) return true;
-    if (a->tempo > b->tempo) return false;
+// --- Implementação dos Métodos do Armazem ---
 
-    // Tie-breaking: CHEGADA events have priority over TRANSPORTE at the same time
-    if (a->tipo < b->tipo) return true;
-    if (a->tipo > b->tipo) return false;
-
-    // Further tie-breaking if necessary
-    if (a->tipo == PACOTE_CHEGA) {
-        return a->pacote->id < b->pacote->id;
-    }
-    if (a->tipo == INICIA_TRANSPORTE) {
-        if (a->armazemOrigem < b->armazemOrigem) return true;
-        if (a->armazemOrigem > b->armazemOrigem) return false;
-        return a->armazemDestino < b->armazemDestino;
-    }
-    
-    return false;
-}
-
-// --- Armazem Implementation ---
 Armazem::Armazem(int _id, int _numArmazens) 
     : id(_id), numTotalArmazens(_numArmazens) {
     secoes = new Pilha<Pacote*>[numTotalArmazens];
@@ -36,12 +13,10 @@ Armazem::~Armazem() {
 }
 
 void Armazem::armazena(Pacote* pacote) {
-    // Determine the next warehouse in the package's route
-    int proximoDestino = pacote->rota[pacote->posRota + 1];
+    int proximoDestino = pacote->rota[pacote->posRota];
     secoes[proximoDestino].push(pacote);
     pacote->posRota++;
     
-    // Print storage event message 
     printf("%07ld pacote %03d armazenado em %03d na secao %03d\n",
            pacote->tempoPostagem, pacote->id, id, proximoDestino);
 }
@@ -63,8 +38,8 @@ bool Armazem::secoesVazias() const {
     return true;
 }
 
+// --- Implementação dos Métodos do Escalonador ---
 
-// --- Escalonador Implementation ---
 Escalonador::Escalonador(int maxEventos) {
     pq = new FilaDePrioridade(maxEventos);
 }
@@ -83,4 +58,24 @@ Evento* Escalonador::proximo() {
 
 bool Escalonador::vazio() const {
     return pq->isEmpty();
+}
+
+// --- Implementação das Funções Globais ---
+
+void processaChegada(Evento* evento) {
+    Pacote* pacote = evento->pacote;
+    int armazemAtualId = evento->armazemOrigem; 
+    pacote->tempoPostagem = evento->tempo;
+
+    if (armazemAtualId == pacote->destino) {
+        printf("%07ld pacote %03d entregue em %03d\n",
+               evento->tempo, pacote->id, armazemAtualId);
+        extern int pacotesEntregues;
+        pacotesEntregues++;
+        delete[] pacote->rota;
+        delete pacote;
+    } else {
+        extern Armazem** armazens;
+        armazens[armazemAtualId]->armazena(pacote);
+    }
 }
