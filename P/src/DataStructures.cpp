@@ -1,15 +1,12 @@
 #include "DataStructures.h"
-#include "Types.h" // Necessário para a definição completa de Evento
-
-// --- Implementação dos Métodos da FilaDePrioridade ---
+#include "Types.h"
+#include <cstdio>
 
 FilaDePrioridade::FilaDePrioridade(int cap) : capacidade(cap), tamanho(0) {
     heap = new Evento*[capacidade];
 }
 
 FilaDePrioridade::~FilaDePrioridade() {
-    // A limpeza dos objetos Evento* é feita no loop principal do main.
-    // Este destrutor apenas libera o array do heap.
     delete[] heap;
 }
 
@@ -45,7 +42,8 @@ void FilaDePrioridade::heapifyBaixo(int index) {
 
 void FilaDePrioridade::insere(Evento* evento) {
     if (tamanho == capacidade) {
-        // Para este projeto, a capacidade inicial é considerada suficiente.
+        // Alerta para o caso de a fila de prioridades encher
+        fprintf(stderr, "ALERTA: Fila de prioridades cheia! Capacidade = %d. Evento descartado.\n", capacidade);
         return;
     }
     tamanho++;
@@ -54,14 +52,11 @@ void FilaDePrioridade::insere(Evento* evento) {
 }
 
 Evento* FilaDePrioridade::removeMin() {
-    if (tamanho == 0) {
-        return nullptr;
-    }
+    if (tamanho == 0) return nullptr;
     if (tamanho == 1) {
         tamanho--;
         return heap[0];
     }
-
     Evento* root = heap[0];
     heap[0] = heap[tamanho - 1];
     tamanho--;
@@ -73,22 +68,26 @@ bool FilaDePrioridade::isEmpty() const {
     return tamanho == 0;
 }
 
-// Implementação da função de comparação de eventos
 bool FilaDePrioridade::comparaEventos(Evento* a, Evento* b) {
-    if (a->tempo < b->tempo) return true;
-    if (a->tempo > b->tempo) return false;
+    // CORREÇÃO FINAL: Esta é a lógica de desempate mais robusta e padrão.
+    // Prioridade 1: Tempo (menor primeiro)
+    if (a->tempo != b->tempo) {
+        return a->tempo < b->tempo;
+    }
 
-    if (a->tipo < b->tipo) return true;
-    if (a->tipo > b->tipo) return false;
+    // Prioridade 2: Tipo de Evento (menor enum primeiro)
+    // Garante que chegadas sejam processadas antes de transportes no mesmo instante.
+    if (a->tipo != b->tipo) {
+        return a->tipo < b->tipo;
+    }
 
+    // Prioridade 3: Dados específicos como desempate final
     if (a->tipo == PACOTE_CHEGA) {
         return a->pacote->id < b->pacote->id;
-    }
-    if (a->tipo == INICIA_TRANSPORTE) {
-        if (a->armazemOrigem < b->armazemOrigem) return true;
-        if (a->armazemOrigem > b->armazemOrigem) return false;
+    } else { // INICIA_TRANSPORTE
+        if (a->armazemOrigem != b->armazemOrigem) {
+            return a->armazemOrigem < b->armazemOrigem;
+        }
         return a->armazemDestino < b->armazemDestino;
     }
-    
-    return false;
 }

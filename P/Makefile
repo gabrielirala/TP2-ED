@@ -1,54 +1,41 @@
-# 1. Variáveis do Compilador
+# Compilador e flags
 CXX = g++
-# Define o padrão do C++. C++17 é uma escolha moderna e segura.
-CXX_STANDARD = -std=c++17
+CXXFLAGS = -Wall -Wextra -Wpedantic -Werror -std=c++17 -g -Iinclude
 
-# 2. Flags de Compilação
-# -Wall -Wextra -Wpedantic: Ativam um conjunto robusto de avisos para erros comuns.
-# -Werror: Trata todos os avisos como erros, forçando a correção.
-# -g: Adiciona símbolos de depuração (essencial para o GDB).
-CXXFLAGS = -Wall -Wextra -Wpedantic -Werror $(CXX_STANDARD) -g
+# Diretórios
+SRCDIR = src
+INCDIR = include
+OBJDIR = obj
+BINDIR = bin
 
-# 3. Estrutura de Diretórios
-SRC_DIR = src
-OBJ_DIR = obj
-BIN_DIR = bin
-INCLUDE_DIR = -Iinclude
+# Encontra todos os arquivos .cpp no diretório src
+SOURCES = $(wildcard $(SRCDIR)/*.cpp)
 
-# Nome do executável final
-EXECUTABLE = $(BIN_DIR)/tp2.out
+# Gera os nomes dos arquivos objeto a partir dos fontes
+OBJECTS = $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(SOURCES))
 
-# 4. Detecção Automática de Arquivos
-# Encontra todos os arquivos .cpp na pasta src
-SOURCES = $(wildcard $(SRC_DIR)/*.cpp)
-# Gera os nomes dos arquivos-objeto correspondentes na pasta obj
-OBJECTS = $(patsubst $(SRC_DIR)/%.cpp, $(OBJ_DIR)/%.o, $(SOURCES))
+# Nome do executável
+EXECUTABLE = $(BINDIR)/tp2.out
 
-# 5. Regras de Compilação (Targets)
-
-# Regra principal: 'make' ou 'make all'
+# Regra principal: criar o executável
 all: $(EXECUTABLE)
 
-# Regra para linkar os arquivos-objeto e criar o executável
+# Regra para linkar os objetos e criar o executável final
 $(EXECUTABLE): $(OBJECTS)
-	@mkdir -p $(BIN_DIR) # Cria o diretório bin/ se ele não existir
-	$(CXX) $(OBJECTS) -o $(EXECUTABLE)
+	@mkdir -p $(@D)
+	$(CXX) -o $@ $^
 
 # Regra para compilar cada arquivo .cpp em um arquivo .o
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
-	@mkdir -p $(OBJ_DIR) # Cria o diretório obj/ se ele não existir
-	$(CXX) $(CXXFLAGS) $(INCLUDE_DIR) -c $< -o $@
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp | $(OBJDIR)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+# Regra para criar o diretório de objetos, se não existir
+$(OBJDIR):
+	@mkdir -p $@
 
 # Regra para limpar os arquivos gerados
 clean:
-	rm -rf $(OBJ_DIR)
+	rm -rf $(OBJDIR) $(BINDIR)
 
-# Regra de limpeza completa (objetos e executável)
-fclean: clean
-	rm -f $(EXECUTABLE)
-
-# Regra para recompilar tudo do zero
-re: fclean all
-
-# Declara alvos que não são arquivos
-.PHONY: all clean fclean re
+# Phony targets não são nomes de arquivos
+.PHONY: all clean

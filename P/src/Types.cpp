@@ -1,5 +1,6 @@
 #include "Types.h"
-#include "DataStructures.h" // Necessário para as implementações que usam Pilha e FilaDePrioridade
+#include "DataStructures.h"
+#include <cstdio>
 
 // --- Implementação dos Métodos do Armazem ---
 
@@ -9,6 +10,14 @@ Armazem::Armazem(int _id, int _numArmazens)
 }
 
 Armazem::~Armazem() {
+    // CORREÇÃO: Garante que todos os pacotes restantes sejam deletados.
+    for (int i = 0; i < numTotalArmazens; ++i) {
+        while (!secoes[i].isEmpty()) {
+            Pacote* p = secoes[i].pop();
+            delete[] p->rota;
+            delete p;
+        }
+    }
     delete[] secoes;
 }
 
@@ -23,10 +32,6 @@ void Armazem::armazena(Pacote* pacote) {
 
 Pilha<Pacote*>& Armazem::getSecao(int destino) {
     return secoes[destino];
-}
-
-int Armazem::getId() const {
-    return id;
 }
 
 bool Armazem::secoesVazias() const {
@@ -45,6 +50,15 @@ Escalonador::Escalonador(int maxEventos) {
 }
 
 Escalonador::~Escalonador() {
+    // CORREÇÃO: Garante que todos os eventos e pacotes restantes na fila sejam deletados.
+    while (!pq->isEmpty()) {
+        Evento* ev = pq->removeMin();
+        if (ev->pacote != nullptr) {
+            delete[] ev->pacote->rota;
+            delete ev->pacote;
+        }
+        delete ev;
+    }
     delete pq;
 }
 
@@ -58,24 +72,4 @@ Evento* Escalonador::proximo() {
 
 bool Escalonador::vazio() const {
     return pq->isEmpty();
-}
-
-// --- Implementação das Funções Globais ---
-
-void processaChegada(Evento* evento) {
-    Pacote* pacote = evento->pacote;
-    int armazemAtualId = evento->armazemOrigem; 
-    pacote->tempoPostagem = evento->tempo;
-
-    if (armazemAtualId == pacote->destino) {
-        printf("%07ld pacote %03d entregue em %03d\n",
-               evento->tempo, pacote->id, armazemAtualId);
-        extern int pacotesEntregues;
-        pacotesEntregues++;
-        delete[] pacote->rota;
-        delete pacote;
-    } else {
-        extern Armazem** armazens;
-        armazens[armazemAtualId]->armazena(pacote);
-    }
 }

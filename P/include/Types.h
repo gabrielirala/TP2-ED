@@ -1,12 +1,10 @@
 #ifndef TYPES_H
 #define TYPES_H
 
-// --- Declarações Avançadas ---
-// Informa ao compilador que estes tipos existem, sem precisar incluir DataStructures.h
+#include <iostream>
+
 template<typename T> class Pilha;
 class FilaDePrioridade;
-
-// --- Tipos Principais (ADTs) ---
 
 enum TipoEvento {
     PACOTE_CHEGA,
@@ -41,7 +39,6 @@ public:
     ~Armazem();
     void armazena(Pacote* pacote);
     Pilha<Pacote*>& getSecao(int destino);
-    int getId() const;
     bool secoesVazias() const;
 };
 
@@ -55,8 +52,5 @@ public:
     Evento* proximo();
     bool vazio() const;
 };
-
-// --- Declaração de Funções Globais ---
-void processaChegada(Evento* evento);
 
 #endif // TYPES_H

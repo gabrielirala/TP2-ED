@@ -15,7 +15,6 @@ struct Node {
 };
 
 // --- Stack Implementation (LIFO) ---
-// Como é uma classe de template, a implementação deve ficar no header.
 template<typename T>
 class Pilha {
 private:
@@ -49,7 +48,6 @@ public:
 };
 
 // --- Queue Implementation (FIFO) ---
-// Como é uma classe de template, a implementação deve ficar no header.
 template<typename T>
 class Fila {
 private:
@@ -83,8 +81,7 @@ public:
     bool isEmpty() const { return frente == nullptr; }
 };
 
-// --- Priority Queue (Min-Heap) Implementation ---
-// Esta é uma classe concreta, então separamos declaração de implementação.
+// --- Priority Queue (Min-Heap) Declaration ---
 class FilaDePrioridade {
 private:
     Evento** heap;
@@ -92,16 +89,12 @@ private:
     int tamanho;
     void heapifyCima(int index);
     void heapifyBaixo(int index);
-    
-    // +++ CORREÇÃO: Implementação das funções auxiliares movida para o header +++
     int parent(int i) { return (i - 1) / 2; }
     int left(int i) { return 2 * i + 1; }
     int right(int i) { return 2 * i + 2; }
-
     void swap(int i, int j);
     bool comparaEventos(Evento* a, Evento* b);
 public:
-    // Apenas declarações dos métodos
     FilaDePrioridade(int cap);
     ~FilaDePrioridade();
     void insere(Evento* evento);
